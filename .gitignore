@@ -1,0 +1,11 @@
+/bin/
+*.o
+spike_bpfel.go
+spike_bpfeb.go
+spike_bpfel.o
+spike_bpfeb.o
+vmlinux.h
+node_modules/
+spike/fixtures/*/node_modules/
+*.log
+.DS_Store

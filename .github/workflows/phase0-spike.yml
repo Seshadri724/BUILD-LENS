@@ -1,0 +1,179 @@
+# Phase 0 feasibility spike (ROADMAP.md "Phase 0 — Feasibility spike").
+#
+# Everything here runs on GitHub's own ephemeral runners. It never touches
+# a developer machine, by design — see STRATEGY / ROADMAP for why: the only
+# question worth answering is whether GitHub-hosted runners themselves
+# support what BuildLens needs. Delete or replace this workflow once
+# Phase 0 concludes; it is not meant to become the product's CI.
+name: phase0-spike
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "spike/**"
+      - ".github/workflows/phase0-spike.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  # CP-0.1 / M0.1 / M0.2 / M0.3: does a real eBPF program load and emit
+  # events on each target kernel? Answered per-kernel by exit code +
+  # captured event count, not by opinion.
+  kernel-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install BPF toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev linux-tools-common "linux-tools-$(uname -r)" || true
+          # linux-tools-<kernel> is sometimes unavailable on hosted images;
+          # fall back to the generic bpftool package if the exact match fails.
+          which bpftool || sudo apt-get install -y -qq bpftool || true
+
+      - name: Record kernel feature matrix (M0.2)
+        run: |
+          mkdir -p out
+          {
+            echo "kernel: $(uname -r)"
+            echo "arch: $(uname -m)"
+            echo "btf_present: $(test -f /sys/kernel/btf/vmlinux && echo yes || echo no)"
+            echo "unprivileged_bpf_disabled: $(cat /proc/sys/kernel/unprivileged_bpf_disabled 2>/dev/null || echo unknown)"
+            echo "lsm_active: $(cat /sys/kernel/security/lsm 2>/dev/null || echo unknown)"
+            echo "bpftool_present: $(command -v bpftool >/dev/null && echo yes || echo no)"
+          } | tee out/kernel-info-${{ matrix.os }}.txt
+
+      - name: Generate vmlinux.h from this runner's own BTF
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > spike/bpf/vmlinux.h
+          wc -l spike/bpf/vmlinux.h
+
+      - name: go mod tidy
+        run: go mod tidy
+
+      - name: go generate (compile the BPF object via bpf2go)
+        working-directory: spike/cmd/spike
+        run: go generate ./...
+
+      - name: Build spike loader
+        run: go build -o bin/spike ./spike/cmd/spike
+
+      - name: Load probe and capture real exec events (M0.1, M0.3)
+        run: |
+          sudo ./bin/spike -duration 15s -out out/events-${{ matrix.os }}.jsonl &
+          SPIKE_PID=$!
+          # Generate some exec() traffic for the probe to actually observe.
+          for i in $(seq 1 20); do /bin/true; done
+          wait $SPIKE_PID
+          EVENT_COUNT=$(wc -l < out/events-${{ matrix.os }}.jsonl)
+          echo "captured $EVENT_COUNT exec events"
+          test "$EVENT_COUNT" -gt 0 || (echo "CP-0.1 FAIL: zero events captured on ${{ matrix.os }}" && exit 1)
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase0-evidence-${{ matrix.os }}
+          path: out/
+
+  # CP-0.2: added wall-clock overhead of running the probe during a real
+  # install. Five paired runs per side — cheap enough for a spike; bump to
+  # 30 per ROADMAP.md before treating the number as final.
+  overhead-benchmark:
+    needs: kernel-matrix
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install BPF toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev time linux-tools-common "linux-tools-$(uname -r)" || true
+          which bpftool || sudo apt-get install -y -qq bpftool || true
+
+      - name: Build spike loader
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > spike/bpf/vmlinux.h
+          go mod tidy
+          (cd spike/cmd/spike && go generate ./...)
+          go build -o bin/spike ./spike/cmd/spike
+
+      - name: Baseline npm ci (no probe), 5 runs
+        working-directory: spike/fixtures/sample-node-app
+        run: |
+          : > /tmp/baseline.txt
+          for i in 1 2 3 4 5; do
+            rm -rf node_modules package-lock.json
+            /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
+            cat /tmp/t.txt >> /tmp/baseline.txt
+          done
+          cat /tmp/baseline.txt
+
+      - name: Instrumented npm ci (probe attached), 5 runs
+        working-directory: spike/fixtures/sample-node-app
+        run: |
+          : > /tmp/instrumented.txt
+          for i in 1 2 3 4 5; do
+            rm -rf node_modules package-lock.json
+            sudo ../../../bin/spike -duration 60s -out /tmp/run-$i.jsonl &
+            SPIKE_PID=$!
+            /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
+            sudo kill $SPIKE_PID 2>/dev/null || true
+            cat /tmp/t.txt >> /tmp/instrumented.txt
+          done
+          cat /tmp/instrumented.txt
+
+      - name: Compute overhead (CP-0.2 answer)
+        run: |
+          mkdir -p out
+          python3 - <<'EOF'
+          def median(vals):
+              vals = sorted(vals)
+              n = len(vals)
+              return vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+
+          baseline = [float(x) for x in open("/tmp/baseline.txt") if x.strip()]
+          instrumented = [float(x) for x in open("/tmp/instrumented.txt") if x.strip()]
+
+          mb, mi = median(baseline), median(instrumented)
+          overhead = (mi - mb) / mb * 100
+
+          print(f"baseline median:     {mb:.2f}s  {baseline}")
+          print(f"instrumented median: {mi:.2f}s  {instrumented}")
+          print(f"overhead: {overhead:.1f}%")
+
+          with open("out/overhead.txt", "w") as f:
+              f.write(f"baseline_median_s={mb:.2f}\ninstrumented_median_s={mi:.2f}\noverhead_pct={overhead:.1f}\n")
+
+          # CP-0.2 pass criteria per ROADMAP.md: median overhead <= 5%
+          if overhead > 5:
+              print("CP-0.2 FAIL: overhead exceeds 5%")
+              exit(1)
+          print("CP-0.2 PASS")
+          EOF
+        env:
+          PYTHONUNBUFFERED: "1"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase0-overhead
+          path: out/

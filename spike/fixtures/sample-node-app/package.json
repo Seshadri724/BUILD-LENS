@@ -1,0 +1,9 @@
+{
+  "name": "buildlens-spike-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Throwaway fixture for Phase 0 overhead measurement (CP-0.2). Not a real app.",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
