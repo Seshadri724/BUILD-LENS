@@ -79,6 +79,16 @@ func run(duration time.Duration, outPath string) error {
 	defer out.Close()
 	enc := json.NewEncoder(out)
 
+	// Signal readiness to whatever is generating exec() traffic for us to
+	// observe. Attaching a tracepoint (sudo spawn, BPF verifier, link
+	// attach) takes real wall-clock time — a caller that fires traffic
+	// immediately after backgrounding this process races it and loses.
+	readyPath := outPath + ".ready"
+	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
+		return fmt.Errorf("write readiness marker: %w", err)
+	}
+	defer os.Remove(readyPath)
+
 	log.Printf("attached; capturing exec events for %s", duration)
 
 	deadline := time.AfterFunc(duration, func() { rd.Close() })

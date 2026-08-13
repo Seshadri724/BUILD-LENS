@@ -79,12 +79,29 @@ jobs:
 
       - name: Load probe and capture real exec events (M0.1, M0.3)
         run: |
-          sudo ./bin/spike -duration 15s -out out/events-${{ matrix.os }}.jsonl &
+          OUT_FILE=out/events-${{ matrix.os }}.jsonl
+          sudo ./bin/spike -duration 15s -out "$OUT_FILE" &
           SPIKE_PID=$!
-          # Generate some exec() traffic for the probe to actually observe.
+
+          # Attaching (sudo spawn, BPF verifier, tracepoint link) takes real
+          # wall-clock time. Wait for the readiness marker instead of
+          # guessing a sleep — generating traffic before attach is complete
+          # reliably produces zero events, which is what happened here first.
+          for i in $(seq 1 100); do
+            [ -f "$OUT_FILE.ready" ] && break
+            sleep 0.1
+          done
+          if [ ! -f "$OUT_FILE.ready" ]; then
+            echo "probe never signaled readiness within 10s"
+            wait $SPIKE_PID || true
+            exit 1
+          fi
+
+          # Generate some exec() traffic for the now-attached probe to observe.
           for i in $(seq 1 20); do /bin/true; done
+
           wait $SPIKE_PID
-          EVENT_COUNT=$(wc -l < out/events-${{ matrix.os }}.jsonl)
+          EVENT_COUNT=$(wc -l < "$OUT_FILE")
           echo "captured $EVENT_COUNT exec events"
           test "$EVENT_COUNT" -gt 0 || (echo "CP-0.1 FAIL: zero events captured on ${{ matrix.os }}" && exit 1)
 
