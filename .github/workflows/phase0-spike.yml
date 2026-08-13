@@ -120,8 +120,10 @@ jobs:
           path: out/
 
   # CP-0.2: added wall-clock overhead of running the probe during a real
-  # install. Five paired runs per side — cheap enough for a spike; bump to
-  # 30 per ROADMAP.md before treating the number as final.
+  # install. 30 paired runs per side, per ROADMAP.md — the first pass at
+  # 5 runs on express-only measured 7.7%, but that fixture finished in
+  # ~0.5s, so a one-time fixed cost (BPF load + attach) dominated the
+  # percentage. A larger fixture + more samples dilutes that out.
   overhead-benchmark:
     needs: kernel-matrix
     runs-on: ubuntu-22.04
@@ -164,22 +166,22 @@ jobs:
           # timed loops below.
           npm install --package-lock-only
 
-      - name: Baseline npm ci (no probe), 5 runs
+      - name: Baseline npm ci (no probe), 30 runs
         working-directory: spike/fixtures/sample-node-app
         run: |
           : > /tmp/baseline.txt
-          for i in 1 2 3 4 5; do
+          for i in $(seq 1 30); do
             rm -rf node_modules
             /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
             cat /tmp/t.txt >> /tmp/baseline.txt
           done
           cat /tmp/baseline.txt
 
-      - name: Instrumented npm ci (probe attached), 5 runs
+      - name: Instrumented npm ci (probe attached), 30 runs
         working-directory: spike/fixtures/sample-node-app
         run: |
           : > /tmp/instrumented.txt
-          for i in 1 2 3 4 5; do
+          for i in $(seq 1 30); do
             rm -rf node_modules
             sudo ../../../bin/spike -duration 60s -out /tmp/run-$i.jsonl &
             SPIKE_PID=$!

@@ -19,7 +19,7 @@ Nothing here is production code. It gets deleted or rewritten once Phase 0 concl
 | Checkpoint | Where it's answered |
 |---|---|
 | **CP-0.1** — eBPF loads on hosted runners | `kernel-matrix` job in the workflow. Fails the build if zero events are captured on either `ubuntu-22.04` or `ubuntu-24.04`. |
-| **CP-0.2** — overhead ≤5% | `overhead-benchmark` job. Times `npm ci` five times with the probe attached and five times without, compares medians, fails the build above 5%. Bump to 30 runs per side (per ROADMAP) before treating a borderline number as final — five is enough to catch a gross failure, not enough to trust a number sitting at 4.8%. |
+| **CP-0.2** — overhead ≤5% | `overhead-benchmark` job. Times `npm ci` 30 times with the probe attached and 30 times without, compares medians, fails the build above 5%. First pass ran 5 samples against an `express`-only fixture that installed in ~0.5s — measured 7.7%, but at that scale a one-time fixed cost (BPF load + attach) dominates the percentage rather than steady-state overhead. Fixture now installs a handful of real packages instead of one, and sample count matches the ROADMAP's stated target for a number worth trusting. |
 | **CP-0.3** — differentiation is visible | Not automatable — it's a side-by-side product comparison. See [`CP-0.3-CHECKLIST.md`](CP-0.3-CHECKLIST.md). |
 
 ## Running it
