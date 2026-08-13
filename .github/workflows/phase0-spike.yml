@@ -35,6 +35,12 @@ jobs:
           go-version: "1.23"
 
       - name: Install BPF toolchain
+        env:
+          # Unauthenticated api.github.com calls are capped at 60/hour/IP —
+          # a two-job matrix sharing a runner IP pool can trip that. Every
+          # Actions job gets a token for free; using it raises the cap to
+          # 5000/hour and makes this a non-issue.
+          GH_TOKEN: ${{ github.token }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang llvm libbpf-dev
@@ -42,9 +48,11 @@ jobs:
           # builds (hit this on 6.17.0-1020-azure: no matching package yet).
           # libbpf's static "bootstrap" bpftool reads BTF at runtime and
           # isn't tied to a kernel-specific package at all — use that instead.
-          BPFTOOL_URL=$(curl -fsSL https://api.github.com/repos/libbpf/bpftool/releases/latest \
+          BPFTOOL_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/libbpf/bpftool/releases/latest \
             | grep -o '"browser_download_url": *"[^"]*bpftool-[^"]*-amd64\.tar\.gz"' \
             | head -1 | cut -d'"' -f4)
+          test -n "$BPFTOOL_URL" || (echo "failed to resolve bpftool release download URL" && exit 1)
           curl -fsSL "$BPFTOOL_URL" -o /tmp/bpftool.tar.gz
           sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin
           sudo chmod +x /usr/local/bin/bpftool
