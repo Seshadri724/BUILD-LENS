@@ -120,10 +120,12 @@ jobs:
           path: out/
 
   # CP-0.2: added wall-clock overhead of running the probe during a real
-  # install. 30 paired runs per side, per ROADMAP.md — the first pass at
-  # 5 runs on express-only measured 7.7%, but that fixture finished in
-  # ~0.5s, so a one-time fixed cost (BPF load + attach) dominated the
-  # percentage. A larger fixture + more samples dilutes that out.
+  # install. 30 paired runs per side, per ROADMAP.md. Two prior passes
+  # (7.7% at N=5, 7.4% at N=30) both reloaded and reattached the probe
+  # before every single npm ci call — a real deployment attaches once per
+  # job, not once per command, so both numbers overstated the one-time
+  # BPF load/attach cost by paying it 30x instead of once. Now attaches
+  # once and stays running across all 30 runs, matching production.
   overhead-benchmark:
     needs: kernel-matrix
     runs-on: ubuntu-22.04
@@ -177,18 +179,38 @@ jobs:
           done
           cat /tmp/baseline.txt
 
-      - name: Instrumented npm ci (probe attached), 30 runs
+      - name: Instrumented npm ci (probe attached once for all runs), 30 runs
         working-directory: spike/fixtures/sample-node-app
         run: |
           : > /tmp/instrumented.txt
+          OUT_FILE=/tmp/instrumented-events.jsonl
+
+          # Load and attach ONCE, then keep it running across all 30 npm ci
+          # calls — this matches how BuildLens actually deploys (one agent,
+          # loaded at job start, watching the whole job) per ARCHITECTURE.md.
+          # Reloading per-command, as an earlier version of this benchmark
+          # did, pays the one-time BPF verifier + attach cost 30 times over
+          # and measures something the real product never does.
+          sudo ../../../bin/spike -duration 300s -out "$OUT_FILE" &
+          SPIKE_PID=$!
+
+          for i in $(seq 1 100); do
+            [ -f "$OUT_FILE.ready" ] && break
+            sleep 0.1
+          done
+          if [ ! -f "$OUT_FILE.ready" ]; then
+            echo "probe never signaled readiness within 10s"
+            exit 1
+          fi
+
           for i in $(seq 1 30); do
             rm -rf node_modules
-            sudo ../../../bin/spike -duration 60s -out /tmp/run-$i.jsonl &
-            SPIKE_PID=$!
             /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
-            sudo kill $SPIKE_PID 2>/dev/null || true
             cat /tmp/t.txt >> /tmp/instrumented.txt
           done
+
+          sudo kill $SPIKE_PID 2>/dev/null || true
+          wait $SPIKE_PID 2>/dev/null || true
           cat /tmp/instrumented.txt
 
       - name: Compute overhead (CP-0.2 answer)

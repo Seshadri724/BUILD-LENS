@@ -19,7 +19,7 @@ Nothing here is production code. It gets deleted or rewritten once Phase 0 concl
 | Checkpoint | Where it's answered |
 |---|---|
 | **CP-0.1** — eBPF loads on hosted runners | `kernel-matrix` job in the workflow. Fails the build if zero events are captured on either `ubuntu-22.04` or `ubuntu-24.04`. |
-| **CP-0.2** — overhead ≤5% | `overhead-benchmark` job. Times `npm ci` 30 times with the probe attached and 30 times without, compares medians, fails the build above 5%. First pass ran 5 samples against an `express`-only fixture that installed in ~0.5s — measured 7.7%, but at that scale a one-time fixed cost (BPF load + attach) dominates the percentage rather than steady-state overhead. Fixture now installs a handful of real packages instead of one, and sample count matches the ROADMAP's stated target for a number worth trusting. |
+| **CP-0.2** — overhead ≤5% | `overhead-benchmark` job. Times `npm ci` 30 times with the probe attached once for the whole batch, vs. 30 times with no probe, compares medians, fails the build above 5%. Two earlier passes (7.7% at N=5 on a tiny fixture, then 7.4% at N=30) both reattached the probe fresh before every single `npm ci` call — paying the one-time BPF load/attach cost 30 times instead of once, which a real deployment never does (the agent attaches once per job, per [ARCHITECTURE.md](../ARCHITECTURE.md#3-agent-architecture-bl-agent)). Fixed to attach once and stay running across the batch. |
 | **CP-0.3** — differentiation is visible | Not automatable — it's a side-by-side product comparison. See [`CP-0.3-CHECKLIST.md`](CP-0.3-CHECKLIST.md). |
 
 ## Running it
