@@ -155,12 +155,21 @@ jobs:
           (cd spike/cmd/spike && go generate ./...)
           go build -o bin/spike ./spike/cmd/spike
 
+      - name: Generate lockfile (one-time, not timed)
+        working-directory: spike/fixtures/sample-node-app
+        run: |
+          # npm ci refuses to run without an existing package-lock.json —
+          # it doesn't resolve dependencies itself, only installs from a
+          # lockfile that's already there. Generate it once, outside the
+          # timed loops below.
+          npm install --package-lock-only
+
       - name: Baseline npm ci (no probe), 5 runs
         working-directory: spike/fixtures/sample-node-app
         run: |
           : > /tmp/baseline.txt
           for i in 1 2 3 4 5; do
-            rm -rf node_modules package-lock.json
+            rm -rf node_modules
             /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
             cat /tmp/t.txt >> /tmp/baseline.txt
           done
@@ -171,7 +180,7 @@ jobs:
         run: |
           : > /tmp/instrumented.txt
           for i in 1 2 3 4 5; do
-            rm -rf node_modules package-lock.json
+            rm -rf node_modules
             sudo ../../../bin/spike -duration 60s -out /tmp/run-$i.jsonl &
             SPIKE_PID=$!
             /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
