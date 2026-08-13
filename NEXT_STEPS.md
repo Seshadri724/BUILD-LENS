@@ -1,13 +1,16 @@
 # Next steps
 
-**State as of now:** everything is committed and already pushed to `origin` (`Seshadri724/BUILD-LENS`, private — confirmed by a 404 on the public API, so status can't be checked from here without your credentials). Because the push touched `spike/**` and the workflow file itself, `phase0-spike.yml` should already have auto-triggered on GitHub. Nothing further needs pushing to get a first result.
+**State as of now:** first real run failed both kernel-matrix jobs — a missing `#include <bpf/bpf_core_read.h>` in `exec.bpf.c`, and `bpftool` not found on the `6.17.0-1020-azure` runner because apt's kernel-matched package doesn't exist for it yet. Both are fixed and committed locally (`f05726b`, `c1770de`), **not yet pushed.**
 
-## 1. Read the run — do this first
+## 0. Push the fix — this is the actual next action
 
-Open the **Actions** tab on the repo and look at the `phase0-spike` run:
+```bash
+git push
+```
 
-- [ ] `kernel-matrix` — did `ubuntu-22.04` and `ubuntu-24.04` both capture >0 exec events? This is the literal CP-0.1 answer.
-- [ ] `overhead-benchmark` — what's in `out/overhead.txt`? This is CP-0.2.
+That re-triggers `phase0-spike.yml` on the fixed code. `overhead-benchmark` never ran last time (`needs: kernel-matrix`, which failed) — this is the first run where it gets a chance to.
+
+## 1. Read the run
 - [ ] Download both artifact sets (`phase0-evidence-*`, `phase0-overhead`) — they're the raw material for the memo in step 3.
 
 If it hasn't run at all, trigger it manually: Actions tab → `phase0-spike` → **Run workflow**.
