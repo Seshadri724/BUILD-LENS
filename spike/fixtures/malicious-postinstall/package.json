@@ -1,0 +1,9 @@
+{
+  "name": "malicious-postinstall",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Synthetic detection-proof fixture for Phase 0 CP-0.3/M0.5 (ROADMAP.md). Never published, installed only as a local file: dependency, and only ever talks to 127.0.0.1 inside the same CI job. Recreates the shape of the Codecov/PyPI-webhook incidents described in PRD.md 2.3 without contacting anything real.",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "buildlens-detection-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Phase 0 M0.5 detection-proof fixture (ROADMAP.md). Installing this triggers malicious-postinstall's synthetic read-then-egress, which the spike probes are meant to catch and correlate. See CP-0.3-CHECKLIST.md.",
+  "dependencies": {
+    "malicious-postinstall": "file:../malicious-postinstall"
+  }
+}

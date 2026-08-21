@@ -119,6 +119,97 @@ jobs:
           name: phase0-evidence-${{ matrix.os }}
           path: out/
 
+  # M0.5 / CP-0.3 evidence: is the read-then-egress correlation actually
+  # visible in raw events? A synthetic postinstall script reads a fake
+  # .env and POSTs it to a listener on 127.0.0.1 -- nothing leaves the
+  # runner. If the probes are working, spike emits a TAINTED_EGRESS
+  # record tying the read to the connect. This job's artifact is the
+  # "BuildLens's output" half of the CP-0.3-CHECKLIST.md comparison.
+  detection-proof:
+    needs: kernel-matrix
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install BPF toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev
+          BPFTOOL_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/libbpf/bpftool/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*bpftool-[^"]*-amd64\.tar\.gz"' \
+            | head -1 | cut -d'"' -f4)
+          test -n "$BPFTOOL_URL" || (echo "failed to resolve bpftool release download URL" && exit 1)
+          curl -fsSL "$BPFTOOL_URL" -o /tmp/bpftool.tar.gz
+          sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin
+          sudo chmod +x /usr/local/bin/bpftool
+          bpftool version
+
+      - name: Build spike loader
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > spike/bpf/vmlinux.h
+          go mod tidy
+          (cd spike/cmd/spike && go generate ./...)
+          go build -o bin/spike ./spike/cmd/spike
+
+      - name: Start local listener (stands in for the attacker's server)
+        run: |
+          mkdir -p out
+          python3 spike/fixtures/local_listener.py > out/listener.log 2>&1 &
+          echo $! > /tmp/listener.pid
+          sleep 1
+
+      - name: Load probe, trigger the synthetic malicious install, check correlation
+        run: |
+          OUT_FILE=out/detection-proof.jsonl
+          sudo ./bin/spike -duration 30s -out "$OUT_FILE" &
+          SPIKE_PID=$!
+
+          for i in $(seq 1 100); do
+            [ -f "$OUT_FILE.ready" ] && break
+            sleep 0.1
+          done
+          if [ ! -f "$OUT_FILE.ready" ]; then
+            echo "probe never signaled readiness within 10s"
+            exit 1
+          fi
+
+          (cd spike/fixtures/detection-demo && npm install --no-audit --no-fund)
+
+          sleep 1 # let the last ring buffer events land before we stop reading
+          sudo kill "$SPIKE_PID" 2>/dev/null || true
+          wait "$SPIKE_PID" 2>/dev/null || true
+          kill "$(cat /tmp/listener.pid)" 2>/dev/null || true
+
+          echo "--- listener log (what the 'attacker' received) ---"
+          cat out/listener.log
+          echo "--- raw probe events ---"
+          cat "$OUT_FILE"
+
+          echo "--- correlation check ---"
+          if grep -q '"type":"TAINTED_EGRESS"' "$OUT_FILE"; then
+            echo "M0.5 PASS: read-then-egress correlation captured in raw events"
+          else
+            echo "M0.5 FAIL: no TAINTED_EGRESS record found"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase0-detection-proof
+          path: out/
+
   # CP-0.2: added wall-clock overhead of running the probe during a real
   # install. 30 paired runs per side, per ROADMAP.md. Two prior passes
   # (7.7% at N=5, 7.4% at N=30) both reloaded and reattached the probe
