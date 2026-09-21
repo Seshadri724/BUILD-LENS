@@ -29,8 +29,11 @@ jobs:
           go-version: "1.23"
       - name: Run unit and corpus regression tests
         run: |
-          go test -v ./pkg/attribution ./pkg/correlate ./cmd/bl-agent
-          go vet ./pkg/attribution ./pkg/correlate ./cmd/bl-agent
+          # cmd/bl-agent imports the Linux eBPF bindings, which are generated
+          # in build-linux-agent. Keep this job free of generated privileged
+          # artifacts; the Linux build job tests the CLI after generation.
+          go test -v ./pkg/attribution ./pkg/correlate
+          go vet ./pkg/attribution ./pkg/correlate
 
   build-linux-agent:
     name: Linux eBPF Generation & Binary Build
@@ -129,11 +132,11 @@ jobs:
           OUT_SARIF=buildlens.sarif
 
           echo "Starting bl-agent daemon..."
-          sudo -n ./bin/bl-agent record \
+          setsid sudo -n ./bin/bl-agent record \
             -out "$OUT_EVENTS" \
             -stats-out "$OUT_STATS" \
             -debug &
-          AGENT_PID=$!
+          AGENT_PGID=$!
 
           # Wait for probe readiness marker
           for i in $(seq 1 100); do
@@ -142,7 +145,7 @@ jobs:
           done
           if [ ! -f "$OUT_EVENTS.ready" ]; then
             echo "Agent never signaled readiness within 10s"
-            sudo kill -9 "$AGENT_PID" 2>/dev/null || true
+            sudo -n kill -9 -- -"$AGENT_PGID" 2>/dev/null || true
             exit 1
           fi
 
@@ -150,11 +153,13 @@ jobs:
           (cd testdata/fixtures/live-integration && node node_modules/exfil-demo-pkg/postinstall.js)
 
           # Stop agent with SIGINT and wait for .done
-          sudo kill -SIGINT "$AGENT_PID"
+          sudo -n kill -SIGINT -- -"$AGENT_PGID"
           for i in $(seq 1 50); do
             [ -f "$OUT_EVENTS.done" ] && break
             sleep 0.1
           done
+          test -f "$OUT_EVENTS.done" || (echo "Agent did not shut down cleanly" && exit 1)
+          test -f "$OUT_STATS" || (echo "Agent stats file was not written" && exit 1)
 
           echo "Scoring recorded events with package lockfile and stats..."
           ./bin/bl-agent score \

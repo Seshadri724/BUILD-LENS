@@ -38,6 +38,13 @@ func TestInferPackageFromCwd(t *testing.T) {
 			wantLifecycle: "",
 		},
 		{
+			name:          "bare relative node_modules in cmdline",
+			cwd:           "/home/runner/work/repo",
+			cmdline:       "node node_modules/evil-dep/postinstall.js",
+			wantPkg:       "evil-dep",
+			wantLifecycle: "postinstall",
+		},
+		{
 			name:          "outside node_modules",
 			cwd:           "/home/runner/work/repo/src",
 			cmdline:       "npm test",

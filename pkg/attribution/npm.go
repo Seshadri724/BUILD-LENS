@@ -30,9 +30,11 @@ func InferPackageFromCwd(cwd, cmdline string) (pkgName string, lifecycle string)
 	}
 
 	norm := filepath.ToSlash(target)
-	idx := strings.LastIndex(norm, "/node_modules/")
+	// Accept absolute paths, relative paths, and command lines such as:
+	// `node node_modules/pkg/postinstall.js`.
+	idx := strings.LastIndex(norm, "node_modules/")
 	if idx != -1 {
-		sub := norm[idx+len("/node_modules/"):]
+		sub := norm[idx+len("node_modules/"):]
 		parts := strings.Split(sub, "/")
 		if len(parts) > 0 {
 			if strings.HasPrefix(parts[0], "@") && len(parts) > 1 {
