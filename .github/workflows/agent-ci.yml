@@ -67,8 +67,9 @@ jobs:
         run: |
           go mod tidy
           (cd pkg/agent && go generate ./...)
-          test -f pkg/agent/agent_bpfel.go || (echo "generated Agent BPF Go file missing" && find pkg/agent -maxdepth 1 -type f -print && exit 1)
-          grep -q "type AgentObjects struct" pkg/agent/agent_bpfel.go || (echo "AgentObjects missing from generated file" && exit 1)
+          AGENT_BPF_GO=$(find pkg/agent -maxdepth 1 -type f -name 'agent_*_bpfel.go' -print -quit)
+          test -n "$AGENT_BPF_GO" || (echo "generated Agent BPF Go file missing" && find pkg/agent -maxdepth 1 -type f -print && exit 1)
+          grep -q "type AgentObjects struct" "$AGENT_BPF_GO" || (echo "AgentObjects missing from generated file: $AGENT_BPF_GO" && exit 1)
 
       - name: Build production bl-agent binary
         run: |
