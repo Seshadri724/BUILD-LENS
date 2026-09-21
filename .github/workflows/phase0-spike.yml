@@ -88,7 +88,10 @@ jobs:
       - name: Load probe and capture real exec events (M0.1, M0.3)
         run: |
           OUT_FILE=out/events-${{ matrix.os }}.jsonl
-          sudo ./bin/spike -duration 15s -out "$OUT_FILE" &
+          # CP-0.1 counts raw JSONL records, so enable debug/raw event output.
+          # Without -debug the spike only writes TAINTED_EGRESS evidence and
+          # the exec-only smoke test appears empty even though probes are firing.
+          sudo ./bin/spike -duration 15s -out "$OUT_FILE" -debug &
           SPIKE_PID=$!
 
           # Attaching (sudo spawn, BPF verifier, tracepoint link) takes real
