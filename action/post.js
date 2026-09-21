@@ -27,7 +27,7 @@ function post() {
   const runDir = getState('RUN_DIR') || '/tmp';
   const eventsPath = getState('EVENTS_PATH');
   const statsPath = getState('STATS_PATH');
-  const agentPgid = getState('AGENT_PGID');
+  const agentPid = getState('AGENT_PID') || getState('AGENT_PGID');
   const agentBin = getState('AGENT_BIN');
   const failOpen = getState('FAIL_OPEN');
   const failReason = getState('FAIL_REASON');
@@ -40,15 +40,18 @@ function post() {
     ? lockfileInput
     : path.join(workspace, lockfileInput);
 
-  // Terminate agent process group using sudo -n
-  if (agentPgid) {
-    console.log(`Stopping BuildLens agent process group (PGID -${agentPgid})...`);
+  // Ask the recorded agent process to shut down cleanly. Sending SIGINT to the
+  // entire process group first is unsafe on hosted runners: depending on how
+  // sudo/detached process groups are created, the group can include the step
+  // shell and terminate this post action with exit code 130.
+  if (agentPid) {
+    console.log(`Stopping BuildLens agent (PID ${agentPid})...`);
     try {
-      execSync(`sudo -n kill -SIGINT -${agentPgid}`, { stdio: 'ignore' });
+      execSync(`sudo -n kill -SIGINT -- ${agentPid}`, { stdio: 'ignore' });
     } catch (e) {
-      // Fallback to single PID
+      // The process may already have exited; continue to collect its output.
       try {
-        execSync(`sudo -n kill -SIGINT ${agentPgid}`, { stdio: 'ignore' });
+        execSync(`kill -SIGINT -- ${agentPid}`, { stdio: 'ignore' });
       } catch (_) {}
     }
 
@@ -62,6 +65,17 @@ function post() {
           break;
         }
         execSync('sleep 0.1');
+      }
+
+      // Only after the graceful window has elapsed, terminate a stale agent.
+      // Use the PID again rather than broadcasting to a process group: the
+      // agent has no worker tree, and a group broadcast can include the step
+      // shell on runners with unusual sudo/session behavior.
+      if (!fs.existsSync(donePath)) {
+        console.log(`Agent did not write ${donePath}; terminating stale agent ${agentPid}.`);
+        try {
+          execSync(`sudo -n kill -TERM -- ${agentPid}`, { stdio: 'ignore' });
+        } catch (_) {}
       }
     }
   }

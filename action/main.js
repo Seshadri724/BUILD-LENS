@@ -84,6 +84,9 @@ function main() {
   });
 
   child.unref();
+  // Keep the PID as the primary shutdown handle. The post step may use the
+  // process group only as a last-resort cleanup mechanism.
+  saveState('AGENT_PID', child.pid.toString());
   saveState('AGENT_PGID', child.pid.toString());
 
   // Wait for probe readiness marker
