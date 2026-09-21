@@ -86,40 +86,6 @@ jobs:
           path: action/bin/linux-amd64/bl-agent
 
   action-integration:
-    name: Live GitHub Action eBPF Integration
-    needs: build-linux-agent
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Download prebuilt Linux bl-agent
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-bl-agent
-          path: action/bin/linux-amd64
-
-      - name: Ensure agent binary permissions
-        run: |
-          mkdir -p bin
-          cp action/bin/linux-amd64/bl-agent bin/bl-agent
-          chmod +x action/bin/linux-amd64/bl-agent bin/bl-agent
-          ./bin/bl-agent score --help || true
-
-      - name: Start local destination listener
-        run: |
-          python3 testdata/fixtures/live-integration/listener.py &
-          echo $! > /tmp/listener.pid
-          sleep 1
-
-  action-integration:
     name: Live eBPF Capture & Action Integration
     needs: build-linux-agent
     runs-on: ubuntu-22.04
