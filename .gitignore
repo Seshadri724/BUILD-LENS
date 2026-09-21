@@ -1,11 +1,85 @@
+# Binaries and build outputs
 /bin/
+bin/
+/dist/
+dist/
+out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build & test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+profile.pprof
+.gocache/
+
+# eBPF / bpf2go generated files & headers
 *.o
+*.a
+*_bpfel.go
+*_bpfeb.go
+*_bpfel.o
+*_bpfeb.o
 spike_bpfel.go
 spike_bpfeb.go
 spike_bpfel.o
 spike_bpfeb.o
 vmlinux.h
+
+# BuildLens run artifacts & outputs
+buildlens-manifest.json
+buildlens.sarif
+/events.jsonl
+*.ready
+
+# Node.js & npm (fixtures, benchmarks, dashboard)
 node_modules/
 spike/fixtures/*/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python (benchmarks & listener fixtures)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Environment files and secrets
+.env
+.env.*
+.env.local
+# Preserve synthetic fixtures used for testing/detection
+!spike/fixtures/**/.env
+!testdata/**
+
+# Logs & temp files
 *.log
+*.tmp
+*.pid
+tmp/
+
+# OS metadata
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+
+# IDE & editor configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

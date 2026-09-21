@@ -52,12 +52,16 @@ jobs:
 
 That is the entire integration. No changes to `package.json`, no changes to build commands, no proxy configuration. If the agent cannot load — unsupported kernel, missing capability — it logs a warning and exits 0. **A security tool that breaks builds gets uninstalled by Friday.**
 
+**Today (this repo):** score a JSONL event file with the composite action — see [docs/quickstart.md](docs/quickstart.md). Kernel attach is still the Phase 0 spike.
+
 ---
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
+| [docs/quickstart.md](docs/quickstart.md) | Score events locally and via the GitHub Action (current ship path) |
+| [NEXT_STEPS.md](NEXT_STEPS.md) | What to do this week vs the engineering queue |
 | [PRD.md](PRD.md) | Problem, goals, non-goals, personas, competitive positioning, requirements, user stories with acceptance criteria, risks |
 | [STRATEGY.md](STRATEGY.md) | Why this is a company rather than a tool: the cross-fleet behavioral corpus, where AI earns its place and where it doesn't, market expansion, business model |
 | [ROADMAP.md](ROADMAP.md) | Five phases from feasibility spike to enterprise GA — two parallel tracks, with milestones, deliverables, and hard go/no-go checkpoints |
@@ -72,9 +76,9 @@ Read them in that order. PRD defines what and why, STRATEGY defines why it compo
 
 ## Current status
 
-**Phase 0 — feasibility spike, not yet started.**
+**Phase 0 mechanism: pass (CP-0.1, CP-0.2).** eBPF loads on GitHub-hosted `ubuntu-22.04` / `24.04`. Overhead of the *exec-only* attach-once probe was ~0% on a tiny `npm ci` — re-measure once the full probe set exists. **CP-0.3 (vs Harden-Runner) is still a human judgment call.**
 
-The project has one existential dependency: eBPF must load and attach on GitHub-hosted runners with acceptable overhead. Checkpoint **CP-0.1** in [ROADMAP.md](ROADMAP.md#phase-0--feasibility-spike-3-weeks) resolves this in three weeks. Nothing else should be built until it does. If it fails, the product pivots to self-hosted and container runners only, which roughly halves the addressable market — a decision worth making with data rather than after eight weeks of committed code.
+**Phase 1 started — output path, not the full agent.** `bl-agent score` turns spike JSONL into a versioned manifest + SARIF (`TAINTED_EGRESS`, fail-open, replay-stable). Package attribution is still `unknown`. Next: wire the spike into the Action as `main`/`post`, then real probes (DNS/SNI, ancestor taint, npm/pip identity).
 
 ---
 

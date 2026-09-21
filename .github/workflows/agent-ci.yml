@@ -1,0 +1,39 @@
+# Agent unit tests — no kernel, no sudo. Spike BPF stays on phase0-spike.yml.
+name: agent-ci
+
+on:
+  push:
+    paths:
+      - "pkg/**"
+      - "cmd/**"
+      - "testdata/**"
+      - "action.yml"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/agent-ci.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Test correlator and CLI
+        run: go test ./pkg/... ./cmd/...
+
+  score-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          events: testdata/corpus/tainted-env-post/events.jsonl
+      - name: Manifest must contain TAINTED_EGRESS
+        run: grep -q TAINTED_EGRESS buildlens-manifest.json

@@ -1,0 +1,2 @@
+{"type":"exec","ts":1,"pid":10,"ppid":1,"comm":"npm"}
+{"type":"open","ts":2,"pid":10,"ppid":1,"comm":"npm","path":"/usr/bin/node"}

@@ -1,3 +1,5 @@
+//go:build linux
+
 // Phase 0 spike (M0.1, M0.3, M0.4, M0.5). Answers two questions per
 // ROADMAP.md: does this load and emit real events on a GitHub-hosted
 // runner (CP-0.1), and is the read-then-egress correlation actually

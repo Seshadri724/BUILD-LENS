@@ -1,0 +1,3 @@
+{"type":"open","ts":1000000000,"pid":42,"ppid":1,"comm":"node","path":"/home/runner/work/app/.env"}
+{"type":"connect","ts":1031000000,"pid":42,"ppid":1,"comm":"node","dest":"127.0.0.1:9"}
+{"type":"TAINTED_EGRESS","ts":1031000000,"pid":42,"comm":"node","path":"/home/runner/work/app/.env","dest":"127.0.0.1:9","elapsed_ms":31}

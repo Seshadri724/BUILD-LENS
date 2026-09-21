@@ -1,0 +1,37 @@
+name: BuildLens
+description: Score CI runtime events into a run manifest and SARIF. Fail-open if the event file is missing.
+author: BuildLens
+branding:
+  icon: shield
+  color: blue
+inputs:
+  events:
+    description: Path to JSONL events (spike or agent). Empty or missing writes a clean manifest and exits 0.
+    required: false
+    default: ""
+  mode:
+    description: observe (only mode shipped)
+    required: false
+    default: observe
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.23"
+        cache-dependency-path: ${{ github.action_path }}/go.sum
+
+    - name: Score events
+      shell: bash
+      env:
+        EVENTS: ${{ inputs.events }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        OUT="${GITHUB_WORKSPACE}/buildlens-manifest.json"
+        SARIF="${GITHUB_WORKSPACE}/buildlens.sarif"
+        # Fail-open: missing events is a clean run, not a broken build.
+        go run -C "$ACTION_PATH" ./cmd/bl-agent score \
+          -in "${EVENTS}" \
+          -out "$OUT" \
+          -sarif "$SARIF" | tee -a "$GITHUB_STEP_SUMMARY"
