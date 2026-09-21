@@ -60,14 +60,19 @@ const sensitivePathMarker = ".env"
 func main() {
 	duration := flag.Duration("duration", 30*time.Second, "how long to capture events")
 	outPath := flag.String("out", "events.jsonl", "where to write captured events, one JSON object per line")
+	probes := flag.String("probes", "all", "probes to attach: all, exec, open, connect")
+	noJSON := flag.Bool("no-json", false, "read ring buffer but disable writing JSON to disk")
+	debug := flag.Bool("debug", false, "write raw events; if false, only writes detections and evidence")
+	statsOut := flag.String("stats-out", "", "optional path to write telemetry JSON stats")
 	flag.Parse()
 
-	if err := run(*duration, *outPath); err != nil {
+	if err := run(*duration, *outPath, *probes, *noJSON, *debug, *statsOut); err != nil {
 		log.Fatalf("spike: %v", err)
 	}
 }
 
-func run(duration time.Duration, outPath string) error {
+func run(duration time.Duration, outPath string, probes string, noJSON bool, debug bool, statsOut string) error {
+	startTime := time.Now()
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("remove memlock rlimit: %w", err)
 	}
@@ -78,29 +83,35 @@ func run(duration time.Duration, outPath string) error {
 	}
 	defer objs.Close()
 
-	execTp, err := link.Tracepoint("sched", "sched_process_exec", objs.HandleExec, nil)
-	if err != nil {
-		return fmt.Errorf("attach exec tracepoint: %w", err)
+	if probes == "all" || probes == "exec" {
+		execTp, err := link.Tracepoint("sched", "sched_process_exec", objs.HandleExec, nil)
+		if err != nil {
+			return fmt.Errorf("attach exec tracepoint: %w", err)
+		}
+		defer execTp.Close()
 	}
-	defer execTp.Close()
 
-	openTp, err := link.Tracepoint("syscalls", "sys_enter_openat", objs.HandleOpenat, nil)
-	if err != nil {
-		return fmt.Errorf("attach openat tracepoint: %w", err)
+	if probes == "all" || probes == "open" {
+		openTp, err := link.Tracepoint("syscalls", "sys_enter_openat", objs.HandleOpenat, nil)
+		if err != nil {
+			return fmt.Errorf("attach openat tracepoint: %w", err)
+		}
+		defer openTp.Close()
 	}
-	defer openTp.Close()
 
-	connectEntry, err := link.Kprobe("tcp_v4_connect", objs.HandleTcpConnectEntry, nil)
-	if err != nil {
-		return fmt.Errorf("attach tcp_v4_connect kprobe: %w", err)
-	}
-	defer connectEntry.Close()
+	if probes == "all" || probes == "connect" {
+		connectEntry, err := link.Kprobe("tcp_v4_connect", objs.HandleTcpConnectEntry, nil)
+		if err != nil {
+			return fmt.Errorf("attach tcp_v4_connect kprobe: %w", err)
+		}
+		defer connectEntry.Close()
 
-	connectReturn, err := link.Kretprobe("tcp_v4_connect", objs.HandleTcpConnectReturn, nil)
-	if err != nil {
-		return fmt.Errorf("attach tcp_v4_connect kretprobe: %w", err)
+		connectReturn, err := link.Kretprobe("tcp_v4_connect", objs.HandleTcpConnectReturn, nil)
+		if err != nil {
+			return fmt.Errorf("attach tcp_v4_connect kretprobe: %w", err)
+		}
+		defer connectReturn.Close()
 	}
-	defer connectReturn.Close()
 
 	rd, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -108,34 +119,33 @@ func run(duration time.Duration, outPath string) error {
 	}
 	defer rd.Close()
 
-	out, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create output file: %w", err)
+	var enc *json.Encoder
+	var outFile *os.File
+	if !noJSON {
+		f, err := os.Create(outPath)
+		if err != nil {
+			return fmt.Errorf("create output file: %w", err)
+		}
+		defer f.Close()
+		outFile = f
+		enc = json.NewEncoder(f)
 	}
-	defer out.Close()
-	enc := json.NewEncoder(out)
 
-	// Signal readiness to whatever is generating traffic for us to
-	// observe. Attaching four probes takes real wall-clock time — a
-	// caller that fires traffic immediately after backgrounding this
-	// process races it and loses (this bit us on the exec-only version).
+	// Signal readiness to whatever is generating traffic for us to observe.
 	readyPath := outPath + ".ready"
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
 		return fmt.Errorf("write readiness marker: %w", err)
 	}
 	defer os.Remove(readyPath)
 
-	log.Printf("attached; capturing exec/open/connect events for %s", duration)
+	log.Printf("attached [%s]; capturing events for %s (no_json=%v, debug=%v)", probes, duration, noJSON, debug)
 
 	deadline := time.AfterFunc(duration, func() { rd.Close() })
 	defer deadline.Stop()
 
-	// pid -> path that made it tainted. Deliberately exact-PID only, no
-	// ancestor walk (ARCHITECTURE.md's real taint graph does that) — the
-	// demo scenario has one process doing both the read and the send.
 	tainted := map[uint32]taintRecord{}
-
 	var counts struct{ exec, open, connect, taintedEgress int }
+
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -157,51 +167,106 @@ func run(duration time.Duration, outPath string) error {
 		switch ev.Kind {
 		case evtExec:
 			counts.exec++
-			writeRecord(enc, map[string]any{
-				"type": "exec", "ts": now.UnixNano(),
-				"pid": ev.PID, "ppid": ev.PPID, "comm": comm,
-			})
+			if debug && enc != nil {
+				writeRecord(enc, map[string]any{
+					"type": "exec", "ts": now.UnixNano(),
+					"pid": ev.PID, "ppid": ev.PPID, "comm": comm,
+				})
+			}
 
 		case evtOpen:
 			counts.open++
 			path := cString(ev.Path[:])
-			writeRecord(enc, map[string]any{
-				"type": "open", "ts": now.UnixNano(),
-				"pid": ev.PID, "ppid": ev.PPID, "comm": comm, "path": path,
-			})
+			if debug && enc != nil {
+				writeRecord(enc, map[string]any{
+					"type": "open", "ts": now.UnixNano(),
+					"pid": ev.PID, "ppid": ev.PPID, "comm": comm, "path": path,
+				})
+			}
 			if strings.Contains(path, sensitivePathMarker) {
-				tainted[ev.PID] = taintRecord{path: path, at: now}
+				tainted[ev.PID] = taintRecord{path: path, at: now, comm: comm, ppid: ev.PPID}
 			}
 
 		case evtConnect:
 			counts.connect++
 			dest := net.IP(ev.Daddr[:]).String() + ":" + fmt.Sprint(binary.BigEndian.Uint16(ev.Dport[:]))
-			writeRecord(enc, map[string]any{
-				"type": "connect", "ts": now.UnixNano(),
-				"pid": ev.PID, "ppid": ev.PPID, "comm": comm, "dest": dest,
-			})
+			if debug && enc != nil {
+				writeRecord(enc, map[string]any{
+					"type": "connect", "ts": now.UnixNano(),
+					"pid": ev.PID, "ppid": ev.PPID, "comm": comm, "dest": dest,
+				})
+			}
 			if t, ok := tainted[ev.PID]; ok {
 				counts.taintedEgress++
 				elapsedMS := now.Sub(t.at).Milliseconds()
 				log.Printf("TAINTED_EGRESS: pid=%d (%s) read %q then connected to %s after %dms",
 					ev.PID, comm, t.path, dest, elapsedMS)
-				writeRecord(enc, map[string]any{
-					"type": "TAINTED_EGRESS", "ts": now.UnixNano(),
-					"pid": ev.PID, "comm": comm, "path": t.path,
-					"dest": dest, "elapsed_ms": elapsedMS,
-				})
+				if enc != nil {
+					// In normal mode, ensure evidence open + connect + TAINTED_EGRESS are recorded
+					if !debug {
+						writeRecord(enc, map[string]any{
+							"type": "open", "ts": t.at.UnixNano(),
+							"pid": ev.PID, "ppid": t.ppid, "comm": t.comm, "path": t.path,
+						})
+						writeRecord(enc, map[string]any{
+							"type": "connect", "ts": now.UnixNano(),
+							"pid": ev.PID, "ppid": ev.PPID, "comm": comm, "dest": dest,
+						})
+					}
+					writeRecord(enc, map[string]any{
+						"type": "TAINTED_EGRESS", "ts": now.UnixNano(),
+						"pid": ev.PID, "comm": comm, "path": t.path,
+						"dest": dest, "elapsed_ms": elapsedMS,
+					})
+				}
 			}
 		}
 	}
 
-	log.Printf("done: %d exec, %d open, %d connect, %d TAINTED_EGRESS — written to %s",
-		counts.exec, counts.open, counts.connect, counts.taintedEgress, outPath)
+	var ringBufferDrops uint64
+	if objs.DropStats != nil {
+		var key uint32 = 0
+		_ = objs.DropStats.Lookup(&key, &ringBufferDrops)
+	}
+
+	var fileSize int64
+	if outFile != nil {
+		if fi, err := outFile.Stat(); err == nil {
+			fileSize = fi.Size()
+		}
+	}
+
+	totalEvents := counts.exec + counts.open + counts.connect
+	elapsedTotal := time.Since(startTime)
+	log.Printf("done: %d exec, %d open, %d connect, %d TAINTED_EGRESS (drops=%d, file_size=%d bytes) in %s",
+		counts.exec, counts.open, counts.connect, counts.taintedEgress, ringBufferDrops, fileSize, elapsedTotal)
+
+	if statsOut != "" {
+		st := map[string]any{
+			"runtime_ms":        elapsedTotal.Milliseconds(),
+			"events_total":      totalEvents,
+			"ring_buffer_drops": ringBufferDrops,
+			"file_size_bytes":   fileSize,
+			"counts": map[string]int{
+				"exec":           counts.exec,
+				"open":           counts.open,
+				"connect":        counts.connect,
+				"tainted_egress": counts.taintedEgress,
+			},
+		}
+		if b, err := json.MarshalIndent(st, "", "  "); err == nil {
+			_ = os.WriteFile(statsOut, b, 0o644)
+		}
+	}
+
 	return nil
 }
 
 type taintRecord struct {
 	path string
 	at   time.Time
+	comm string
+	ppid uint32
 }
 
 func writeRecord(enc *json.Encoder, rec map[string]any) {
@@ -209,6 +274,7 @@ func writeRecord(enc *json.Encoder, rec map[string]any) {
 		log.Printf("write event: %v", err)
 	}
 }
+
 
 func cString(b []byte) string {
 	for i, c := range b {

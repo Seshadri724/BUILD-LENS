@@ -1,0 +1,3 @@
+{"type":"exec","ts":7000000000,"pid":210,"ppid":1,"comm":"node","cwd":"/repo","cmdline":"node setup-config.js"}
+{"type":"open","ts":7001000000,"pid":210,"ppid":1,"comm":"node","path":"/repo/.env.example"}
+{"type":"connect","ts":7015000000,"pid":210,"ppid":1,"comm":"node","dest":"142.250.190.46:443"}

@@ -1,0 +1,3 @@
+{"type":"exec","ts":4000000000,"pid":160,"ppid":1,"comm":"node","cwd":"/repo/node_modules/cloud-helper","cmdline":"node install.js"}
+{"type":"open","ts":4001000000,"pid":160,"ppid":1,"comm":"node","path":"/root/.aws/credentials"}
+{"type":"connect","ts":4040000000,"pid":160,"ppid":1,"comm":"node","dest":"192.0.2.1:8080"}

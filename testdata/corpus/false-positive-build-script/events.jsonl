@@ -1,0 +1,6 @@
+{"type":"exec","ts":10000000000,"pid":240,"ppid":1,"comm":"node","cwd":"/repo","cmdline":"npm run build"}
+{"type":"open","ts":10001000000,"pid":240,"ppid":1,"comm":"node","path":"/repo/tsconfig.json"}
+{"type":"exec","ts":10002000000,"pid":241,"ppid":240,"comm":"esbuild","cwd":"/repo","cmdline":"esbuild src/index.ts --bundle --outfile=dist/bundle.js"}
+{"type":"open","ts":10003000000,"pid":241,"ppid":240,"comm":"esbuild","path":"/repo/src/index.ts"}
+{"type":"open","ts":10004000000,"pid":241,"ppid":240,"comm":"esbuild","path":"/repo/package.json"}
+{"type":"connect","ts":10020000000,"pid":240,"ppid":1,"comm":"node","dest":"127.0.0.1:3000"}

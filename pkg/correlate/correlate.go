@@ -2,76 +2,211 @@ package correlate
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"slices"
 	"strings"
 
+	"github.com/buildlens/buildlens/pkg/attribution"
 	"github.com/buildlens/buildlens/pkg/runschema"
 )
 
-const ruleTaintedEgress = "TAINTED_EGRESS"
+const (
+	ruleTaintedEgress = "TAINTED_EGRESS"
+	defaultTaintWindow = 60 * 1e9 // 60 seconds in nanoseconds
+)
 
-// Score is deterministic: same events + same RulesetVersion => byte-identical
-// findings. Uses only Event.TS, never time.Now.
+type ScoreOptions struct {
+	LockfilePath    string
+	TaintWindowNano int64
+	AgentHealth     runschema.AgentHealth
+}
+
+type procNode struct {
+	PID          uint32
+	PPID         uint32
+	Comm         string
+	Cmdline      string
+	Cwd          string
+	ProcessChain []string
+	Attribution  runschema.Attribution
+	Tainted      *taintMark
+}
+
+type taintMark struct {
+	path     string
+	tier     string
+	ts       int64
+	originPID uint32
+	originComm string
+}
+
+// Score evaluates events deterministically using default options.
 func Score(events []runschema.Event) runschema.Manifest {
+	return ScoreWithOptions(events, ScoreOptions{})
+}
+
+// ScoreWithOptions evaluates events deterministically with ancestor-process taint propagation.
+func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Manifest {
 	sorted := slices.Clone(events)
 	slices.SortFunc(sorted, cmpEvent)
 
-	type mark struct {
-		path string
-		ts   int64
+	taintWindow := opts.TaintWindowNano
+	if taintWindow <= 0 {
+		taintWindow = defaultTaintWindow
 	}
-	tainted := map[uint32]mark{}
+
+	procs := map[uint32]*procNode{}
+	dedupKeys := map[string]struct{}{}
 	var findings []runschema.Finding
 
 	for _, e := range sorted {
+		proc, exists := procs[e.PID]
+		if !exists {
+			chain := []string{e.Comm}
+			var attr runschema.Attribution
+			if parent, parentExists := procs[e.PPID]; parentExists {
+				chain = append(slices.Clone(parent.ProcessChain), e.Comm)
+				attr = parent.Attribution
+			}
+			if attr.IsUnknown() && (e.Cwd != "" || e.Cmdline != "") {
+				attr = attribution.AttributeProcess(e.Cwd, e.Cmdline, opts.LockfilePath)
+			}
+			proc = &procNode{
+				PID:          e.PID,
+				PPID:         e.PPID,
+				Comm:         e.Comm,
+				Cmdline:      e.Cmdline,
+				Cwd:          e.Cwd,
+				ProcessChain: chain,
+				Attribution:  attr,
+			}
+			// Inherit taint from parent if within expiration window
+			if parent, parentExists := procs[e.PPID]; parentExists && parent.Tainted != nil {
+				if (e.TS - parent.Tainted.ts) <= taintWindow {
+					proc.Tainted = parent.Tainted
+				}
+			}
+			procs[e.PID] = proc
+		}
+
+		if e.Comm != "" {
+			proc.Comm = e.Comm
+		}
+		if e.Cmdline != "" {
+			proc.Cmdline = e.Cmdline
+		}
+		if e.Cwd != "" {
+			proc.Cwd = e.Cwd
+		}
+		if proc.Attribution.IsUnknown() && (proc.Cwd != "" || proc.Cmdline != "") {
+			proc.Attribution = attribution.AttributeProcess(proc.Cwd, proc.Cmdline, opts.LockfilePath)
+		}
+
 		switch e.Kind {
+		case "exec":
+			// If parent exists and child newly execed, inherit parent's taint if valid
+			if parent, parentExists := procs[e.PPID]; parentExists && parent.Tainted != nil {
+				if (e.TS - parent.Tainted.ts) <= taintWindow {
+					proc.Tainted = parent.Tainted
+				}
+				if proc.Attribution.IsUnknown() && !parent.Attribution.IsUnknown() {
+					proc.Attribution = parent.Attribution
+				}
+			}
+
 		case "open":
 			if tier := fileTier(e.Path); tier != "" {
-				tainted[e.PID] = mark{path: e.Path, ts: e.TS}
+				proc.Tainted = &taintMark{
+					path:       e.Path,
+					tier:       tier,
+					ts:         e.TS,
+					originPID:  e.PID,
+					originComm: e.Comm,
+				}
 			}
+
 		case "connect":
-			m, ok := tainted[e.PID]
-			if !ok {
+			if proc.Tainted == nil {
 				continue
 			}
-			elapsed := (e.TS - m.ts) / 1e6
-			if elapsed < 0 {
-				elapsed = 0
+
+			// Taint expiration check
+			elapsedNano := e.TS - proc.Tainted.ts
+			if elapsedNano < 0 {
+				elapsedNano = 0
 			}
+			if elapsedNano > taintWindow {
+				continue
+			}
+			elapsedMS := elapsedNano / 1e6
+
+			dHost := destHost(e.Dest)
+			dedupKey := fmt.Sprintf("%s|%s|%s|%s", proc.Tainted.path, dHost, proc.Attribution.Package.Name, proc.Comm)
+			if _, seen := dedupKeys[dedupKey]; seen {
+				continue
+			}
+			dedupKeys[dedupKey] = struct{}{}
+
+			fingerprint := computeFingerprint(ruleTaintedEgress, proc.Tainted.tier, dHost, proc.Attribution.Package.Name)
+
+			chain := proc.ProcessChain
+			if len(chain) == 0 {
+				chain = []string{proc.Comm}
+			}
+
 			findings = append(findings, runschema.Finding{
 				Rule:     ruleTaintedEgress,
 				Severity: "critical",
 				Aggregatable: runschema.FindingAgg{
-					Package:   runschema.UnknownPackage(),
-					DestHost:  destHost(e.Dest),
-					FileTier:  fileTier(m.path),
-					ElapsedMS: elapsed,
+					Package:   proc.Attribution.Package,
+					DestHost:  dHost,
+					FileTier:  proc.Tainted.tier,
+					ElapsedMS: elapsedMS,
 				},
 				Context: runschema.FindingContext{
-					PID:  e.PID,
-					Comm: e.Comm,
-					Path: m.path,
-					Dest: e.Dest,
+					PID:          e.PID,
+					Comm:         e.Comm,
+					Path:         proc.Tainted.path,
+					Dest:         e.Dest,
+					ProcessChain: chain,
+					Cmdline:      proc.Cmdline,
+					Cwd:          proc.Cwd,
+					Fingerprint:  fingerprint,
+					Attribution:  proc.Attribution,
 				},
 			})
 		}
 	}
 
 	slices.SortFunc(findings, cmpFinding)
+
 	status := "clean"
-	if len(findings) > 0 {
+	if opts.AgentHealth.Degraded || opts.AgentHealth.EventsDropped > 0 {
+		status = "degraded"
+	} else if len(findings) > 0 {
 		status = "findings"
 	}
+
 	return runschema.Manifest{
 		SchemaVersion:  runschema.SchemaVersion,
 		RulesetVersion: runschema.RulesetVersion,
 		Status:         status,
 		EventCount:     len(events),
+		AgentHealth:    opts.AgentHealth,
 		Findings:       findings,
 	}
+}
+
+func computeFingerprint(rule, tier, host, pkg string) string {
+	h := sha256.New()
+	h.Write([]byte(rule + "|" + tier + "|" + host + "|" + pkg))
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func cmpEvent(a, b runschema.Event) int {
@@ -98,22 +233,43 @@ func cmpFinding(a, b runschema.Finding) int {
 }
 
 func fileTier(path string) string {
-	if strings.Contains(path, ".env") {
-		return "env"
+	lower := strings.ToLower(path)
+
+	// Safe templates and non-secret examples are never credential-bearing
+	if strings.HasSuffix(lower, ".example") ||
+		strings.HasSuffix(lower, ".sample") ||
+		strings.HasSuffix(lower, ".template") ||
+		strings.HasSuffix(lower, ".test") {
+		return ""
 	}
-	return ""
+
+	switch {
+	case strings.Contains(lower, ".env"):
+		return "env"
+	case strings.Contains(lower, ".npmrc") || strings.Contains(lower, ".yarnrc") || strings.Contains(lower, "pip.conf"):
+		return "package_token"
+	case strings.Contains(lower, ".aws/credentials") || strings.Contains(lower, ".aws/config"):
+		return "cloud_credential"
+	case strings.Contains(lower, ".ssh/id_") || strings.Contains(lower, ".ssh/authorized_keys"):
+		return "ssh_key"
+	case strings.Contains(lower, ".netrc") || strings.Contains(lower, ".git-credentials") || strings.Contains(lower, ".gitconfig"):
+		return "git_credential"
+	case strings.Contains(lower, "/etc/shadow") || strings.Contains(lower, "/etc/security"):
+		return "system_auth"
+	default:
+		return ""
+	}
 }
 
+
 func destHost(dest string) string {
-	host, _, ok := strings.Cut(dest, ":")
-	if !ok {
-		return dest
+	if host, _, err := net.SplitHostPort(dest); err == nil {
+		return host
 	}
-	// ponytail: IPv4 host:port only; IPv6 stays as the full dest string.
-	if strings.Count(dest, ":") > 1 {
-		return dest
+	if strings.HasPrefix(dest, "[") && strings.HasSuffix(dest, "]") {
+		return strings.Trim(dest, "[]")
 	}
-	return host
+	return dest
 }
 
 // LoadJSONL reads spike or schema JSONL. Spike's TAINTED_EGRESS rows are
@@ -158,21 +314,25 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		if dest, ok := rec["dest"].(string); ok {
 			ev.Dest = dest
 		}
+		if cmdline, ok := rec["cmdline"].(string); ok {
+			ev.Cmdline = cmdline
+		}
+		if cwd, ok := rec["cwd"].(string); ok {
+			ev.Cwd = cwd
+		}
 		out = append(out, ev)
 	}
 }
 
 func LoadJSONLFile(path string) ([]runschema.Event, error) {
 	if path == "" {
-		return nil, nil
+		return nil, os.ErrNotExist
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	defer f.Close()
 	return LoadJSONL(f)
 }
+

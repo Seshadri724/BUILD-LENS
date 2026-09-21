@@ -1,0 +1,70 @@
+# Release workflow: builds and publishes bl-agent for Linux amd64
+name: release
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Package Linux Binary
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install BPF toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev
+          BPFTOOL_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/libbpf/bpftool/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*bpftool-[^"]*-amd64\.tar\.gz"' \
+            | head -1 | cut -d'"' -f4)
+          test -n "$BPFTOOL_URL" || (echo "failed to resolve bpftool release download URL" && exit 1)
+          curl -fsSL "$BPFTOOL_URL" -o /tmp/bpftool.tar.gz
+          sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin
+          sudo chmod +x /usr/local/bin/bpftool
+          bpftool version
+
+      - name: Generate vmlinux.h
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > pkg/agent/bpf/vmlinux.h
+
+      - name: Generate BPF code
+        run: |
+          go mod tidy
+          (cd pkg/agent && go generate ./...)
+
+      - name: Build release binary
+        run: |
+          mkdir -p dist action/bin/linux-amd64
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/bl-agent-linux-amd64 ./cmd/bl-agent
+          cp dist/bl-agent-linux-amd64 action/bin/linux-amd64/bl-agent
+          (cd dist && sha256sum bl-agent-linux-amd64 > bl-agent-linux-amd64.sha256)
+          cat dist/bl-agent-linux-amd64.sha256
+
+      - name: Upload Release Asset
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/bl-agent-linux-amd64 \
+            dist/bl-agent-linux-amd64.sha256 \
+            --clobber
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bl-agent-linux-amd64
+          path: dist/

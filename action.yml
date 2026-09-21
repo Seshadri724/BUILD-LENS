@@ -1,37 +1,45 @@
-name: BuildLens
-description: Score CI runtime events into a run manifest and SARIF. Fail-open if the event file is missing.
-author: BuildLens
+name: 'BuildLens'
+description: 'Continuous runtime dependency monitoring & credential exfiltration detection for CI builds'
+author: 'BuildLens'
 branding:
-  icon: shield
-  color: blue
-inputs:
-  events:
-    description: Path to JSONL events (spike or agent). Empty or missing writes a clean manifest and exits 0.
-    required: false
-    default: ""
-  mode:
-    description: observe (only mode shipped)
-    required: false
-    default: observe
-runs:
-  using: composite
-  steps:
-    - uses: actions/setup-go@v5
-      with:
-        go-version: "1.23"
-        cache-dependency-path: ${{ github.action_path }}/go.sum
+  icon: 'shield'
+  color: 'blue'
 
-    - name: Score events
-      shell: bash
-      env:
-        EVENTS: ${{ inputs.events }}
-        ACTION_PATH: ${{ github.action_path }}
-      run: |
-        set -euo pipefail
-        OUT="${GITHUB_WORKSPACE}/buildlens-manifest.json"
-        SARIF="${GITHUB_WORKSPACE}/buildlens.sarif"
-        # Fail-open: missing events is a clean run, not a broken build.
-        go run -C "$ACTION_PATH" ./cmd/bl-agent score \
-          -in "${EVENTS}" \
-          -out "$OUT" \
-          -sarif "$SARIF" | tee -a "$GITHUB_STEP_SUMMARY"
+inputs:
+  mode:
+    description: 'Execution mode (observe only)'
+    required: false
+    default: 'observe'
+  manifest:
+    description: 'Path to write run manifest JSON'
+    required: false
+    default: 'buildlens-manifest.json'
+  sarif:
+    description: 'Path to write SARIF report'
+    required: false
+    default: 'buildlens.sarif'
+  debug:
+    description: 'Stream all raw events to disk (debug mode)'
+    required: false
+    default: 'false'
+  lockfile:
+    description: 'Path to package lockfile used for attribution'
+    required: false
+    default: 'package-lock.json'
+
+outputs:
+  manifest:
+    description: 'Path to generated manifest'
+  sarif:
+    description: 'Path to generated SARIF'
+  status:
+    description: 'Run status (clean, findings, degraded)'
+  findings_count:
+    description: 'Number of detected security findings'
+
+runs:
+  using: 'node20'
+  main: 'action/main.js'
+  post: 'action/post.js'
+  post-if: 'always()'
+

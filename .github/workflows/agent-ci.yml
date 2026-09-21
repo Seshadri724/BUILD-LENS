@@ -1,4 +1,4 @@
-# Agent unit tests — no kernel, no sudo. Spike BPF stays on phase0-spike.yml.
+# Agent CI: unit tests, Linux eBPF compilation, and live Action integration
 name: agent-ci
 
 on:
@@ -6,6 +6,7 @@ on:
     paths:
       - "pkg/**"
       - "cmd/**"
+      - "action/**"
       - "testdata/**"
       - "action.yml"
       - "go.mod"
@@ -18,22 +19,236 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  unit-tests:
+    name: Cross-Platform Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Test correlator and CLI
-        run: go test ./pkg/... ./cmd/...
+      - name: Run unit and corpus regression tests
+        run: |
+          go test -v ./pkg/attribution ./pkg/correlate ./cmd/bl-agent
+          go vet ./pkg/attribution ./pkg/correlate ./cmd/bl-agent
 
-  score-fixture:
-    runs-on: ubuntu-latest
+  build-linux-agent:
+    name: Linux eBPF Generation & Binary Build
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: ./
+
+      - uses: actions/setup-go@v5
         with:
-          events: testdata/corpus/tainted-env-post/events.jsonl
-      - name: Manifest must contain TAINTED_EGRESS
-        run: grep -q TAINTED_EGRESS buildlens-manifest.json
+          go-version: "1.23"
+
+      - name: Install BPF toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev
+          BPFTOOL_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/libbpf/bpftool/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*bpftool-[^"]*-amd64\.tar\.gz"' \
+            | head -1 | cut -d'"' -f4)
+          test -n "$BPFTOOL_URL" || (echo "failed to resolve bpftool release download URL" && exit 1)
+          curl -fsSL "$BPFTOOL_URL" -o /tmp/bpftool.tar.gz
+          sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin
+          sudo chmod +x /usr/local/bin/bpftool
+          bpftool version
+
+      - name: Generate vmlinux.h for production agent
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > pkg/agent/bpf/vmlinux.h
+          wc -l pkg/agent/bpf/vmlinux.h
+
+      - name: Generate BPF Go code (bpf2go -target amd64)
+        run: |
+          go mod tidy
+          (cd pkg/agent && go generate ./...)
+
+      - name: Build production bl-agent binary
+        run: |
+          mkdir -p bin action/bin/linux-amd64
+          go build -o bin/bl-agent ./cmd/bl-agent
+          cp bin/bl-agent action/bin/linux-amd64/bl-agent
+          chmod +x bin/bl-agent action/bin/linux-amd64/bl-agent
+
+      - name: Run Linux agent tests
+        run: |
+          go test -v ./pkg/agent ./cmd/bl-agent
+
+      - name: Upload prebuilt Linux bl-agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bl-agent
+          path: action/bin/linux-amd64/bl-agent
+
+  action-integration:
+    name: Live GitHub Action eBPF Integration
+    needs: build-linux-agent
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Download prebuilt Linux bl-agent
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-bl-agent
+          path: action/bin/linux-amd64
+
+      - name: Ensure agent binary permissions
+        run: |
+          mkdir -p bin
+          cp action/bin/linux-amd64/bl-agent bin/bl-agent
+          chmod +x action/bin/linux-amd64/bl-agent bin/bl-agent
+          ./bin/bl-agent score --help || true
+
+      - name: Start local destination listener
+        run: |
+          python3 testdata/fixtures/live-integration/listener.py &
+          echo $! > /tmp/listener.pid
+          sleep 1
+
+  action-integration:
+    name: Live eBPF Capture & Action Integration
+    needs: build-linux-agent
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Download prebuilt Linux bl-agent
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-bl-agent
+          path: action/bin/linux-amd64
+
+      - name: Setup binary permissions
+        run: |
+          mkdir -p bin
+          cp action/bin/linux-amd64/bl-agent bin/bl-agent
+          chmod +x action/bin/linux-amd64/bl-agent bin/bl-agent
+
+      - name: Start local destination listener
+        run: |
+          python3 testdata/fixtures/live-integration/listener.py &
+          echo $! > /tmp/listener.pid
+          sleep 1
+
+      - name: Step A — Test Live Linux Agent Probe Capture and Scoring
+        run: |
+          OUT_EVENTS=/tmp/live-agent-events.jsonl
+          OUT_STATS=/tmp/live-agent-stats.json
+          OUT_MANIFEST=buildlens-manifest.json
+          OUT_SARIF=buildlens.sarif
+
+          echo "Starting bl-agent daemon..."
+          sudo -n ./bin/bl-agent record \
+            -out "$OUT_EVENTS" \
+            -stats-out "$OUT_STATS" \
+            -debug &
+          AGENT_PID=$!
+
+          # Wait for probe readiness marker
+          for i in $(seq 1 100); do
+            [ -f "$OUT_EVENTS.ready" ] && break
+            sleep 0.1
+          done
+          if [ ! -f "$OUT_EVENTS.ready" ]; then
+            echo "Agent never signaled readiness within 10s"
+            sudo kill -9 "$AGENT_PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Running live fixture exfiltration script..."
+          (cd testdata/fixtures/live-integration && node node_modules/exfil-demo-pkg/postinstall.js)
+
+          # Stop agent with SIGINT and wait for .done
+          sudo kill -SIGINT "$AGENT_PID"
+          for i in $(seq 1 50); do
+            [ -f "$OUT_EVENTS.done" ] && break
+            sleep 0.1
+          done
+
+          echo "Scoring recorded events with package lockfile and stats..."
+          ./bin/bl-agent score \
+            -in "$OUT_EVENTS" \
+            -stats "$OUT_STATS" \
+            -lockfile testdata/fixtures/live-integration/package-lock.json \
+            -out "$OUT_MANIFEST" \
+            -sarif "$OUT_SARIF"
+
+      - name: Step B — Verify Live Attribution & Security Findings
+        run: |
+          test -f buildlens-manifest.json || (echo "manifest not generated" && exit 1)
+          test -f buildlens.sarif || (echo "sarif not generated" && exit 1)
+
+          echo "=== Generated Manifest ==="
+          cat buildlens-manifest.json
+
+          # Verify manifest status and rule
+          grep -q '"status": *"findings"' buildlens-manifest.json || (echo "Expected status 'findings'" && exit 1)
+          grep -q '"rule": *"TAINTED_EGRESS"' buildlens-manifest.json || (echo "Expected TAINTED_EGRESS rule" && exit 1)
+
+          # Verify exact package attribution
+          grep -q '"name": *"exfil-demo-pkg"' buildlens-manifest.json || (echo "Expected attributed package 'exfil-demo-pkg'" && exit 1)
+          ! grep -q '"name": *"unknown"' buildlens-manifest.json || (echo "Package attribution was unknown" && exit 1)
+
+          # Verify exfiltration destination and sensitive credential file tier
+          grep -q '"dest_host": *"127.0.0.1"' buildlens-manifest.json || (echo "Expected dest host 127.0.0.1" && exit 1)
+          grep -q '"file_tier": *"env"' buildlens-manifest.json || (echo "Expected file tier 'env'" && exit 1)
+
+          # Verify SARIF output
+          grep -q '"TAINTED_EGRESS"' buildlens.sarif || (echo "Expected TAINTED_EGRESS in SARIF" && exit 1)
+          echo "Live end-to-end agent probe capture and attribution verified!"
+
+      - name: Step C — Test Action JavaScript Lifecycle (main.js & post.js)
+        run: |
+          export INPUT_MANIFEST="action-manifest.json"
+          export INPUT_SARIF="action-sarif.sarif"
+          export INPUT_LOCKFILE="testdata/fixtures/live-integration/package-lock.json"
+          export INPUT_DEBUG="true"
+          export GITHUB_STATE="/tmp/action_test_state"
+          export GITHUB_OUTPUT="/tmp/action_test_output"
+          rm -f "$GITHUB_STATE" "$GITHUB_OUTPUT"
+          touch "$GITHUB_STATE" "$GITHUB_OUTPUT"
+
+          echo "Executing action/main.js..."
+          node action/main.js
+
+          echo "Executing malicious workload..."
+          (cd testdata/fixtures/live-integration && node node_modules/exfil-demo-pkg/postinstall.js)
+
+          echo "Loading state and executing action/post.js..."
+          while IFS='=' read -r key value; do
+            [ -n "$key" ] && export "STATE_${key}=${value}"
+          done < "$GITHUB_STATE"
+
+          node action/post.js
+
+          test -f action-manifest.json || (echo "action-manifest.json missing" && exit 1)
+          grep -q '"status": *"findings"' action-manifest.json || (echo "Action run expected status 'findings'" && exit 1)
+          grep -q '"name": *"exfil-demo-pkg"' action-manifest.json || (echo "Action run expected attributed package 'exfil-demo-pkg'" && exit 1)
+          echo "Action JavaScript lifecycle (main.js -> post.js) verified!"
+
+      - name: Clean up listener
+        if: always()
+        run: |
+          kill $(cat /tmp/listener.pid) 2>/dev/null || true

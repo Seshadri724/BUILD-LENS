@@ -1,0 +1,4 @@
+{"type":"exec","ts":5000000000,"pid":180,"ppid":1,"comm":"node","cwd":"/repo/node_modules/harvest-agent","cmdline":"node postinstall.js"}
+{"type":"open","ts":5001000000,"pid":180,"ppid":1,"comm":"node","path":"/app/.env"}
+{"type":"open","ts":5002000000,"pid":180,"ppid":1,"comm":"node","path":"/home/runner/.ssh/id_ed25519"}
+{"type":"connect","ts":5045000000,"pid":180,"ppid":1,"comm":"node","dest":"198.51.100.99:443"}

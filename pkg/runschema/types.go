@@ -10,10 +10,10 @@ const (
 
 // PackageID is the only key used for cross-run aggregation.
 type PackageID struct {
-	Ecosystem      string `json:"ecosystem"`
-	Name           string `json:"name"`
-	Version        string `json:"version"`
-	IntegrityHash  string `json:"integrity_hash"`
+	Ecosystem     string `json:"ecosystem"`
+	Name          string `json:"name"`
+	Version       string `json:"version,omitempty"`
+	IntegrityHash string `json:"integrity_hash,omitempty"`
 }
 
 func (p PackageID) IsUnknown() bool {
@@ -24,16 +24,46 @@ func UnknownPackage() PackageID {
 	return PackageID{Name: "unknown"}
 }
 
+// Attribution captures the runtime observation evidence of a package.
+type Attribution struct {
+	Package    PackageID `json:"package"`
+	Confidence string    `json:"confidence,omitempty"` // confirmed | probable | unknown
+	Lifecycle  string    `json:"lifecycle,omitempty"`  // preinstall | install | postinstall | build | test | runtime | unknown
+}
+
+func (a Attribution) IsUnknown() bool {
+	return a.Package.IsUnknown()
+}
+
+func UnknownAttribution() Attribution {
+	return Attribution{
+		Package:    UnknownPackage(),
+		Confidence: "unknown",
+		Lifecycle:  "unknown",
+	}
+}
+
 // Event is one kernel observation. TS is the event timestamp (unix nano),
 // never wall clock at score time.
 type Event struct {
-	Kind string `json:"kind"`
-	TS   int64  `json:"ts"`
-	PID  uint32 `json:"pid"`
-	PPID uint32 `json:"ppid"`
-	Comm string `json:"comm"`
-	Path string `json:"path,omitempty"`
-	Dest string `json:"dest,omitempty"`
+	Kind    string `json:"kind"`
+	TS      int64  `json:"ts"`
+	PID     uint32 `json:"pid"`
+	PPID    uint32 `json:"ppid"`
+	Comm    string `json:"comm"`
+	Path    string `json:"path,omitempty"`
+	Dest    string `json:"dest,omitempty"`
+	Cmdline string `json:"cmdline,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+}
+
+// AgentHealth reports telemetry, event drops, and degradation status.
+type AgentHealth struct {
+	Degraded       bool   `json:"degraded"`
+	DegradedReason string `json:"degraded_reason,omitempty"`
+	EventsSeen     uint64 `json:"events_seen"`
+	EventsDropped  uint64 `json:"events_dropped"`
+	KernelVersion  string `json:"kernel_version,omitempty"`
 }
 
 // FindingAgg is safe to roll up across customers.
@@ -46,10 +76,15 @@ type FindingAgg struct {
 
 // FindingContext is repo-identifying. Must not enter aggregate pipelines.
 type FindingContext struct {
-	PID  uint32 `json:"pid"`
-	Comm string `json:"comm"`
-	Path string `json:"path"`
-	Dest string `json:"dest"`
+	PID          uint32   `json:"pid"`
+	Comm         string   `json:"comm"`
+	Path         string   `json:"path"`
+	Dest         string   `json:"dest"`
+	ProcessChain []string `json:"process_chain,omitempty"`
+	Cmdline      string      `json:"cmdline,omitempty"`
+	Cwd          string      `json:"cwd,omitempty"`
+	Fingerprint  string      `json:"fingerprint,omitempty"`
+	Attribution  Attribution `json:"attribution,omitempty"`
 }
 
 type Finding struct {
@@ -60,9 +95,11 @@ type Finding struct {
 }
 
 type Manifest struct {
-	SchemaVersion  string    `json:"schema_version"`
-	RulesetVersion string    `json:"ruleset_version"`
-	Status         string    `json:"status"` // clean | findings | degraded
-	EventCount     int       `json:"event_count"`
-	Findings       []Finding `json:"findings"`
+	SchemaVersion  string      `json:"schema_version"`
+	RulesetVersion string      `json:"ruleset_version"`
+	Status         string      `json:"status"` // clean | findings | degraded
+	EventCount     int         `json:"event_count"`
+	AgentHealth    AgentHealth `json:"agent_health"`
+	Findings       []Finding   `json:"findings"`
 }
+

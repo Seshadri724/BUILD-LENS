@@ -6,9 +6,14 @@
 
 - [ ] GO — all three checkpoints passed, proceed to Phase 1
 - [ ] GO with scope change — CP-0.1 failed, pivoting to self-hosted/container runners only
-- [ ] NO-GO — [reason]
+- [x] HOLD / OPTIMIZE — CP-0.1 PASS, CP-0.2 FAIL (9.9% overhead vs ≤5% target), CP-0.3 mechanism PASS
 
-**CP-0.1 and CP-0.2 both passed with credible, low-noise numbers (run [`077f419`](https://github.com/Seshadri724/BUILD-LENS/commit/077f419)). CP-0.3 is the only thing left before this checkbox can be filled in — see below.**
+**Status Summary:**
+- **CP-0.1:** PASS (eBPF loads & emits real events on Ubuntu 22.04 & 24.04 hosted runners)
+- **CP-0.2:** FAIL — 9.9% median overhead (failed against the ≤5.0% threshold)
+- **CP-0.3 mechanism:** PASS (read-then-egress TAINTED_EGRESS correlation proven in raw events)
+
+Do not raise the 5% threshold. Kernel-side path filtering on `sys_enter_openat` and probe pipeline optimization are required before checking GO.
 
 ## CP-0.1 — eBPF loads on hosted runners
 
@@ -25,24 +30,29 @@ Source: `phase0-evidence-*` artifacts from `.github/workflows/phase0-spike.yml`,
 
 ## CP-0.2 — overhead
 
-| | Median wall clock |
-|---|---|
-| Baseline (no probe) | 1.04s |
-| Instrumented | 1.04s |
-| **Overhead** | **0.0%** |
+| Configuration | Baseline (no probe) | Instrumented | Overhead | Verdict |
+|---|---|---|---|---|
+| Exec-only (N=30 pairs) | 1.04s | 1.04s | 0.0% | Pass |
+| Full probe (unfiltered openat + connect + exec) | 0.60s | 0.67s (+70ms) | **9.9%** | **FAIL** (target ≤5.0%) |
 
-N=30 pairs, attach-once (probe loaded once, stays attached across all 30 `npm ci` calls — matching how BuildLens actually deploys). **PASS**, well inside the ≤5% target.
+N=30 paired runs. **FAIL: 9.9% median overhead exceeds the 5.0% ceiling.**
 
-Two earlier passes (7.7% at N=5 on a tiny fixture, 7.4% at N=30) both measured a benchmark artifact, not real overhead: the probe was being reloaded and reattached before every single `npm ci` call, paying the one-time BPF verifier + attach cost 30 times over. Fixing the benchmark to attach once — the real deployment pattern — collapsed the number to 0.0%.
+**Why it failed:**
+While an exec-only probe has negligible overhead (~0.0%), instrumenting `sys_enter_openat` without in-kernel filtering emits ring-buffer events for every single file open during `npm ci` (tens of thousands of calls for Node modules, stats, and configs). This floods the BPF ring buffer, burns kernel-to-userspace context switches, and forces continuous JSON-encoding on harmless file opens.
 
-**Caveat that belongs in front of anyone who reads this number later:** this measures the *mechanism* (BPF load, attach-once, ring buffer read loop) with a single exec-only probe. It proves the foundation is free. It does not yet measure Phase 1's real probe set — file_open (with a kernel-side path filter to control event volume on a build doing millions of `openat` calls), tcp_connect, DNS, SNI parsing, byte accounting, and the userspace taint correlator all add real per-event work that this number says nothing about. Re-run this benchmark, or its Phase 1 equivalent (NFR-1 in PRD.md), once those probes exist — don't let "0% overhead" get cited past what it actually proved.
+**Fix required before Phase 1 gate passes:**
+1. Filter sensitive paths (`.env`, `.npmrc`, `.yarnrc`, `.aws/credentials`, `.ssh/id_`, `.netrc`, `.git-credentials`) directly in the BPF program so >99.9% of harmless opens are discarded with zero ring-buffer overhead.
+2. Separate production (in-memory correlation) from debug (raw JSONL write) modes.
+3. Benchmark against both the micro-fixture and a realistic 100+ dependency build.
 
-Source: `phase0-overhead` artifact, `out/overhead.txt`, run `077f419`.
+Source: `phase0-overhead` artifact, `out/overhead.txt`.
 
 ## CP-0.3 — differentiation
 
-Not started. Screenshots and answers go here once `CP-0.3-CHECKLIST.md` is done — the one checkpoint here that isn't a workflow output, it's a judgment call against Harden-Runner's actual UI.
+- **Detection mechanism:** PASS — `detection-proof` captures synthetic malicious postinstall exfiltration (`TAINTED_EGRESS`) linking `.env` read to localhost egress in raw events.
+- **Commercial comparison:** Pending `docs/harden-runner-comparison.md` and side-by-side screenshots per `CP-0.3-CHECKLIST.md`.
 
 ## Recommendation
 
-CP-0.1 and CP-0.2 are both resolved, cleanly, with numbers that survived being second-guessed twice. The mechanism BuildLens depends on works on GitHub-hosted runners, on both target kernels, with effectively zero overhead for the minimal probe tested. What's carried forward into Phase 1, concretely: budget time for hosted-runner environment quirks that have nothing to do with eBPF itself (package availability lagging fresh kernel images, API rate limits under parallel jobs) — none of these are blockers, but Phase 0 already spent real debugging cycles on exactly this category and Phase 1's kernel CI matrix (M1.1) should expect more of it. The 0% overhead number is real but narrow — re-establish it against the full Phase 1 probe set before repeating it to a design partner. CP-0.3 is the only open item before the GO/NO-GO box above can be checked.
+Do not proceed to Phase 1 until CP-0.2 is brought under ≤5.0% on realistic builds via kernel-side filtering. The 5.0% threshold is an immutable product constraint: an agent that slows CI builds by 10% will be disabled by developers. Keep the threshold, optimize the probe pipeline, and re-benchmark.
+

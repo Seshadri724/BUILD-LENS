@@ -2,8 +2,9 @@ package sarif
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
-	"strconv"
+	"strings"
 
 	"github.com/buildlens/buildlens/pkg/runschema"
 )
@@ -33,33 +34,101 @@ type driver struct {
 type rule struct {
 	ID               string `json:"id"`
 	ShortDescription text   `json:"shortDescription"`
+	HelpURI          string `json:"helpUri,omitempty"`
 }
 
 type text struct {
 	Text string `json:"text"`
 }
 
+type location struct {
+	PhysicalLocation physicalLocation `json:"physicalLocation"`
+}
+
+type physicalLocation struct {
+	ArtifactLocation artifactLocation `json:"artifactLocation"`
+	Region           *region          `json:"region,omitempty"`
+}
+
+type artifactLocation struct {
+	URI string `json:"uri"`
+}
+
+type region struct {
+	StartLine int `json:"startLine"`
+}
+
 type result struct {
-	RuleID                string            `json:"ruleId"`
-	Level                 string            `json:"level"`
-	Message               text              `json:"message"`
-	PartialFingerprints   map[string]string `json:"partialFingerprints"`
+	RuleID              string            `json:"ruleId"`
+	Level               string            `json:"level"`
+	Message             text              `json:"message"`
+	Locations           []location        `json:"locations,omitempty"`
+	PartialFingerprints map[string]string `json:"partialFingerprints"`
 }
 
 func FromManifest(m runschema.Manifest) logFile {
 	results := make([]result, 0, len(m.Findings))
 	for _, f := range m.Findings {
+		pkg := f.Aggregatable.Package
+		pkgDisplay := pkg.Name
+		if pkg.Version != "" {
+			pkgDisplay = fmt.Sprintf("%s@%s", pkg.Name, pkg.Version)
+		}
+		if pkgDisplay == "" {
+			pkgDisplay = "unknown"
+		}
+
+		chain := strings.Join(f.Context.ProcessChain, " → ")
+		if chain == "" {
+			chain = f.Context.Comm
+		}
+
+		lifecycle := f.Context.Attribution.Lifecycle
+		if lifecycle == "" {
+			lifecycle = "unknown"
+		}
+		confidence := f.Context.Attribution.Confidence
+		if confidence == "" {
+			confidence = "unknown"
+		}
+
+		msg := fmt.Sprintf("Critical: dependency credential access\n\n"+
+			"Package: %s\n"+
+			"Lifecycle: %s\n"+
+			"Sensitive file: %s\n"+
+			"Process chain: %s\n"+
+			"Destination: %s\n"+
+			"Elapsed time: %d ms\n"+
+			"Confidence: %s\n\n"+
+			"Recommended action:\n"+
+			"Remove the dependency and regenerate package-lock.json.",
+			pkgDisplay, lifecycle, f.Context.Path, chain, f.Aggregatable.DestHost, f.Aggregatable.ElapsedMS, confidence)
+
+		fp := f.Context.Fingerprint
+		if fp == "" {
+			fp = fmt.Sprintf("%s|%s|%s|%s", f.Rule, f.Aggregatable.FileTier, f.Aggregatable.DestHost, pkg.Name)
+		}
+
+		locs := []location{
+			{
+				PhysicalLocation: physicalLocation{
+					ArtifactLocation: artifactLocation{URI: "package.json"},
+					Region:           &region{StartLine: 1},
+				},
+			},
+		}
+
 		results = append(results, result{
-			RuleID: f.Rule,
-			Level:  "error",
-			Message: text{Text: f.Rule + " " + f.Aggregatable.FileTier + " -> " + f.Aggregatable.DestHost +
-				" pid=" + strconv.FormatUint(uint64(f.Context.PID), 10) +
-				" elapsed_ms=" + strconv.FormatInt(f.Aggregatable.ElapsedMS, 10)},
+			RuleID:    f.Rule,
+			Level:     "error",
+			Message:   text{Text: msg},
+			Locations: locs,
 			PartialFingerprints: map[string]string{
-				"buildlens/v1": f.Rule + "|" + f.Aggregatable.FileTier + "|" + f.Aggregatable.DestHost + "|" + f.Aggregatable.Package.Name,
+				"buildlens/v1": fp,
 			},
 		})
 	}
+
 	return logFile{
 		Version: "2.1.0",
 		Schema:  "https://json.schemastore.org/sarif-2.1.0.json",
@@ -70,12 +139,77 @@ func FromManifest(m runschema.Manifest) logFile {
 				Version:        m.RulesetVersion,
 				Rules: []rule{{
 					ID:               "TAINTED_EGRESS",
-					ShortDescription: text{Text: "Sensitive file read followed by egress from the same process"},
+					ShortDescription: text{Text: "Sensitive file read followed by unexpected network egress"},
+					HelpURI:          "https://github.com/buildlens/buildlens/blob/main/docs/rules/TAINTED_EGRESS.md",
 				}},
 			}},
 			Results: results,
 		}},
 	}
+}
+
+// GenerateStepSummary produces markdown formatted for GITHUB_STEP_SUMMARY.
+func GenerateStepSummary(m runschema.Manifest) string {
+	var sb strings.Builder
+
+	if m.Status == "degraded" {
+		sb.WriteString("### ⚠️ BuildLens Runtime: DEGRADED\n\n")
+		sb.WriteString(fmt.Sprintf("**Reason:** `%s`\n\n", m.AgentHealth.DegradedReason))
+		sb.WriteString("> BuildLens operated in fail-open mode. Builds were not interrupted, but complete runtime observation was unavailable.\n")
+		return sb.String()
+	}
+
+	if len(m.Findings) == 0 {
+		sb.WriteString("### ✅ BuildLens Runtime: CLEAN\n\n")
+		sb.WriteString("No suspicious credential access or unauthorized exfiltration detected during build.\n")
+		return sb.String()
+	}
+
+	sb.WriteString(fmt.Sprintf("### 🚨 BuildLens Alert: %d Security Finding(s)\n\n", len(m.Findings)))
+
+	for i, f := range m.Findings {
+		pkg := f.Aggregatable.Package
+		pkgDisplay := pkg.Name
+		if pkg.Version != "" {
+			pkgDisplay = fmt.Sprintf("%s@%s", pkg.Name, pkg.Version)
+		}
+		if pkgDisplay == "" {
+			pkgDisplay = "unknown"
+		}
+
+		chain := strings.Join(f.Context.ProcessChain, " → ")
+		if chain == "" {
+			chain = f.Context.Comm
+		}
+
+		lifecycle := f.Context.Attribution.Lifecycle
+		confidence := f.Context.Attribution.Confidence
+		if confidence == "" {
+			confidence = "unknown"
+		}
+		confidencePct := "90%"
+		if confidence == "confirmed" {
+			confidencePct = "99%"
+		} else if confidence == "unknown" {
+			confidencePct = "50%"
+		}
+
+		sb.WriteString(fmt.Sprintf("#### Finding %d: %s\n\n", i+1, f.Rule))
+		sb.WriteString(fmt.Sprintf("- **Package:** `%s`\n", pkgDisplay))
+		if lifecycle != "" {
+			sb.WriteString(fmt.Sprintf("- **Lifecycle:** `%s`\n", lifecycle))
+		}
+		sb.WriteString(fmt.Sprintf("- **Sensitive File:** `%s` (%s)\n", f.Context.Path, f.Aggregatable.FileTier))
+		sb.WriteString(fmt.Sprintf("- **Process Chain:** `%s`\n", chain))
+		sb.WriteString(fmt.Sprintf("- **Destination:** `%s`\n", f.Aggregatable.DestHost))
+		sb.WriteString(fmt.Sprintf("- **Elapsed Time:** `%d ms`\n", f.Aggregatable.ElapsedMS))
+		sb.WriteString(fmt.Sprintf("- **Confidence:** `%s (%s)`\n\n", confidence, confidencePct))
+		sb.WriteString("**Recommended Action:**\n")
+		sb.WriteString("```bash\nnpm uninstall " + pkg.Name + " && npm install --package-lock-only\n```\n\n")
+		sb.WriteString("---\n\n")
+	}
+
+	return sb.String()
 }
 
 func WriteFile(path string, m runschema.Manifest) error {

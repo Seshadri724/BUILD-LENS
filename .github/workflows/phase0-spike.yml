@@ -243,97 +243,39 @@ jobs:
           sudo chmod +x /usr/local/bin/bpftool
           bpftool version
 
-      - name: Build spike loader
+      - name: Build production bl-agent and spike loader
         run: |
+          mkdir -p bin action/bin/linux-amd64 out
           bpftool btf dump file /sys/kernel/btf/vmlinux format c > spike/bpf/vmlinux.h
+          cp spike/bpf/vmlinux.h pkg/agent/bpf/vmlinux.h
           go mod tidy
           (cd spike/cmd/spike && go generate ./...)
+          (cd pkg/agent && go generate ./...)
           go build -o bin/spike ./spike/cmd/spike
+          go build -o bin/bl-agent ./cmd/bl-agent
+          cp bin/bl-agent action/bin/linux-amd64/bl-agent
 
-      - name: Generate lockfile (one-time, not timed)
-        working-directory: spike/fixtures/sample-node-app
+      - name: Generate realistic fixture lockfile
+        working-directory: spike/fixtures/realistic-node-app
+        run: npm install --package-lock-only
+
+      - name: Run paired benchmark across probe configurations
         run: |
-          # npm ci refuses to run without an existing package-lock.json —
-          # it doesn't resolve dependencies itself, only installs from a
-          # lockfile that's already there. Generate it once, outside the
-          # timed loops below.
-          npm install --package-lock-only
+          python3 spike/bench/run_benchmark.py \
+            --app-dir spike/fixtures/realistic-node-app \
+            --workload "npm ci --silent && npm run build && npm test" \
+            --agent-bin bin/bl-agent \
+            --pairs 15 \
+            --out-dir out
 
-      - name: Baseline npm ci (no probe), 30 runs
-        working-directory: spike/fixtures/sample-node-app
-        run: |
-          : > /tmp/baseline.txt
-          for i in $(seq 1 30); do
-            rm -rf node_modules
-            /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
-            cat /tmp/t.txt >> /tmp/baseline.txt
-          done
-          cat /tmp/baseline.txt
+          echo "### CP-0.2 Benchmark Results (realistic-node-app)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat out/overhead.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Instrumented npm ci (probe attached once for all runs), 30 runs
-        working-directory: spike/fixtures/sample-node-app
-        run: |
-          : > /tmp/instrumented.txt
-          OUT_FILE=/tmp/instrumented-events.jsonl
-
-          # Load and attach ONCE, then keep it running across all 30 npm ci
-          # calls — this matches how BuildLens actually deploys (one agent,
-          # loaded at job start, watching the whole job) per ARCHITECTURE.md.
-          # Reloading per-command, as an earlier version of this benchmark
-          # did, pays the one-time BPF verifier + attach cost 30 times over
-          # and measures something the real product never does.
-          sudo ../../../bin/spike -duration 300s -out "$OUT_FILE" &
-          SPIKE_PID=$!
-
-          for i in $(seq 1 100); do
-            [ -f "$OUT_FILE.ready" ] && break
-            sleep 0.1
-          done
-          if [ ! -f "$OUT_FILE.ready" ]; then
-            echo "probe never signaled readiness within 10s"
-            exit 1
-          fi
-
-          for i in $(seq 1 30); do
-            rm -rf node_modules
-            /usr/bin/time -f "%e" -o /tmp/t.txt npm ci --silent
-            cat /tmp/t.txt >> /tmp/instrumented.txt
-          done
-
-          sudo kill $SPIKE_PID 2>/dev/null || true
-          wait $SPIKE_PID 2>/dev/null || true
-          cat /tmp/instrumented.txt
-
-      - name: Compute overhead (CP-0.2 answer)
-        run: |
-          mkdir -p out
-          python3 - <<'EOF'
-          def median(vals):
-              vals = sorted(vals)
-              n = len(vals)
-              return vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
-
-          baseline = [float(x) for x in open("/tmp/baseline.txt") if x.strip()]
-          instrumented = [float(x) for x in open("/tmp/instrumented.txt") if x.strip()]
-
-          mb, mi = median(baseline), median(instrumented)
-          overhead = (mi - mb) / mb * 100
-
-          print(f"baseline median:     {mb:.2f}s  {baseline}")
-          print(f"instrumented median: {mi:.2f}s  {instrumented}")
-          print(f"overhead: {overhead:.1f}%")
-
-          with open("out/overhead.txt", "w") as f:
-              f.write(f"baseline_median_s={mb:.2f}\ninstrumented_median_s={mi:.2f}\noverhead_pct={overhead:.1f}\n")
-
-          # CP-0.2 pass criteria per ROADMAP.md: median overhead <= 5%
-          if overhead > 5:
-              print("CP-0.2 FAIL: overhead exceeds 5%")
-              exit(1)
-          print("CP-0.2 PASS")
-          EOF
-        env:
-          PYTHONUNBUFFERED: "1"
+          # Verify CP-0.2 gate (overhead <= 5%) on normal full probe
+          grep -q "pass=true" out/overhead.txt || (echo "CP-0.2 FAIL: overhead exceeds 5% or ring buffer dropped events" && exit 1)
+          echo "CP-0.2 PASS"
 
       - uses: actions/upload-artifact@v4
         if: always()

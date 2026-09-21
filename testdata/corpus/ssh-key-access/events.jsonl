@@ -1,0 +1,3 @@
+{"type":"exec","ts":3000000000,"pid":140,"ppid":1,"comm":"python3","cwd":"/repo/deps/bad-lib","cmdline":"python3 setup.py install"}
+{"type":"open","ts":3001000000,"pid":140,"ppid":1,"comm":"python3","path":"/home/runner/.ssh/id_rsa"}
+{"type":"connect","ts":3050000000,"pid":140,"ppid":1,"comm":"python3","dest":"203.0.113.15:2222"}

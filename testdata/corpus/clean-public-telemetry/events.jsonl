@@ -1,0 +1,3 @@
+{"type":"exec","ts":8000000000,"pid":220,"ppid":1,"comm":"node","cwd":"/repo","cmdline":"npx next build"}
+{"type":"open","ts":8001000000,"pid":220,"ppid":1,"comm":"node","path":"/repo/pages/index.js"}
+{"type":"connect","ts":8020000000,"pid":220,"ppid":1,"comm":"node","dest":"telemetry.nextjs.org:443"}

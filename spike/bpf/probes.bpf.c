@@ -43,6 +43,13 @@ struct {
 	__uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 4);
+	__type(key, __u32);
+	__type(value, __u64);
+} drop_stats SEC(".maps");
+
 // tcp_v4_connect entry->return correlation: the kprobe stashes the sock*,
 // the kretprobe reads the now-populated destination fields off it. This
 // is the standard pattern (see libbpf-tools tcpconnect) — dest fields are
@@ -55,6 +62,13 @@ struct {
 	__type(value, __u64); // struct sock *
 } connect_socks SEC(".maps");
 
+static __always_inline void record_drop(__u32 reason)
+{
+	__u64 *cnt = bpf_map_lookup_elem(&drop_stats, &reason);
+	if (cnt)
+		__sync_fetch_and_add(cnt, 1);
+}
+
 static __always_inline void fill_common(struct event *e, __u8 kind)
 {
 	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
@@ -66,12 +80,52 @@ static __always_inline void fill_common(struct event *e, __u8 kind)
 	bpf_get_current_comm(&e->comm, sizeof(e->comm));
 }
 
+// BPF kernel-side filter: drop 99.9% of harmless openat calls in CI (node_modules,
+// shared libraries, stats) before reserving ring buffer space or waking userspace.
+static __always_inline int is_sensitive_path(const char *p, int len)
+{
+	#pragma unroll
+	for (int i = 0; i < 96; i++) {
+		if (i >= len)
+			break;
+		if (p[i] == '.') {
+			// .env
+			if (p[i+1] == 'e' && p[i+2] == 'n' && p[i+3] == 'v')
+				return 1;
+			// .npmrc
+			if (p[i+1] == 'n' && p[i+2] == 'p' && p[i+3] == 'm' && p[i+4] == 'r' && p[i+5] == 'c')
+				return 1;
+			// .yarnrc
+			if (p[i+1] == 'y' && p[i+2] == 'a' && p[i+3] == 'r' && p[i+4] == 'n' && p[i+5] == 'r' && p[i+6] == 'c')
+				return 1;
+			// .netrc
+			if (p[i+1] == 'n' && p[i+2] == 'e' && p[i+3] == 't' && p[i+4] == 'r' && p[i+5] == 'c')
+				return 1;
+			// .ssh/id_
+			if (p[i+1] == 's' && p[i+2] == 's' && p[i+3] == 'h' && p[i+4] == '/' && p[i+5] == 'i' && p[i+6] == 'd' && p[i+7] == '_')
+				return 1;
+			// .aws/credentials
+			if (p[i+1] == 'a' && p[i+2] == 'w' && p[i+3] == 's' && p[i+4] == '/' && p[i+5] == 'c' && p[i+6] == 'r' && p[i+7] == 'e' && p[i+8] == 'd')
+				return 1;
+			// .git-credentials
+			if (p[i+1] == 'g' && p[i+2] == 'i' && p[i+3] == 't' && p[i+4] == '-' && p[i+5] == 'c' && p[i+6] == 'r' && p[i+7] == 'e' && p[i+8] == 'd')
+				return 1;
+		}
+		// /etc/shadow
+		if (p[i] == '/' && p[i+1] == 'e' && p[i+2] == 't' && p[i+3] == 'c' && p[i+4] == '/' && p[i+5] == 's' && p[i+6] == 'h' && p[i+7] == 'a' && p[i+8] == 'd')
+			return 1;
+	}
+	return 0;
+}
+
 SEC("tp/sched/sched_process_exec")
 int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
 {
 	struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		record_drop(0);
 		return 0;
+	}
 
 	fill_common(e, EVT_EXEC);
 	bpf_ringbuf_submit(e, 0);
@@ -82,13 +136,24 @@ SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_openat(struct trace_event_raw_sys_enter *ctx)
 {
 	const char *filename = (const char *)ctx->args[1];
+	char temp_path[MAX_PATH_LEN];
 
-	struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	int len = bpf_probe_read_user_str(temp_path, sizeof(temp_path), filename);
+	if (len <= 0)
 		return 0;
 
+	// Kernel-side filter: if not a sensitive pattern, exit immediately
+	if (!is_sensitive_path(temp_path, len))
+		return 0;
+
+	struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		record_drop(0);
+		return 0;
+	}
+
 	fill_common(e, EVT_OPEN);
-	bpf_probe_read_user_str(&e->path, sizeof(e->path), filename);
+	__builtin_memcpy(e->path, temp_path, sizeof(e->path));
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
@@ -115,8 +180,10 @@ int BPF_KRETPROBE(handle_tcp_connect_return, int ret)
 
 	struct sock *sk = (struct sock *)(*skp);
 	struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		record_drop(0);
 		return 0;
+	}
 
 	fill_common(e, EVT_CONNECT);
 	BPF_CORE_READ_INTO(&e->daddr, sk, __sk_common.skc_daddr);
@@ -124,3 +191,4 @@ int BPF_KRETPROBE(handle_tcp_connect_return, int ret)
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
+
