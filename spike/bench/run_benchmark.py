@@ -75,9 +75,15 @@ def wait_for_ready(ready_path, timeout=10.0):
 
 def start_probe(agent_bin, args, out_events, stats_out):
     ready_path = out_events + ".ready"
+    done_path = out_events + ".done"
     if os.path.exists(ready_path):
         try:
             os.remove(ready_path)
+        except OSError:
+            pass
+    for stale_path in (out_events, stats_out, done_path):
+        try:
+            os.remove(stale_path)
         except OSError:
             pass
 
@@ -89,7 +95,14 @@ def start_probe(agent_bin, args, out_events, stats_out):
         "-stats-out", stats_out,
     ] + args
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Keep sudo and the agent in a dedicated process group so shutdown reaches
+    # the actual agent and its deferred stats write is allowed to complete.
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     deadline = time.time() + 10.0
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -104,11 +117,21 @@ def start_probe(agent_bin, args, out_events, stats_out):
 
 def stop_probe(proc):
     if proc and proc.poll() is None:
-        subprocess.run(["sudo", "-n", "kill", "-SIGINT", str(proc.pid)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["sudo", "-n", "kill", "-SIGINT", "--", f"-{proc.pid}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
             proc.wait(timeout=3.0)
         except subprocess.TimeoutExpired:
-            subprocess.run(["sudo", "-n", "kill", "-9", str(proc.pid)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                ["sudo", "-n", "kill", "-9", "--", f"-{proc.pid}"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             proc.wait(timeout=2.0)
 
 

@@ -46,6 +46,10 @@ func TestAgentStatsSerialization(t *testing.T) {
 }
 
 func TestRecordOptionsDefaults(t *testing.T) {
+	if os.Getenv("BUILDLENS_RUN_EBPF_TESTS") != "1" {
+		t.Skip("requires a privileged Linux eBPF environment; covered by live integration")
+	}
+
 	tempDir := t.TempDir()
 	outPath := filepath.Join(tempDir, "events.jsonl")
 
