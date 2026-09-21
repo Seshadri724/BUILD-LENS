@@ -11,7 +11,7 @@
 // Usage: sudo ./spike -duration 30s -out events.jsonl
 package main
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-global-types Spike ../../bpf/probes.bpf.c -- -I../../bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target amd64 -cc clang -no-global-types Spike ../../bpf/probes.bpf.c -- -I../../bpf
 
 import (
 	"bytes"
