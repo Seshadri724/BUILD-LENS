@@ -16,7 +16,10 @@ Run: [cp03-compare #1](https://github.com/Seshadri724/BUILD-LENS/actions/runs/35
 
 Screenshot: `spike/evidence/cp-0.3/harden-runner.png`
 
-Source: the agent log in the job's "Post Harden-Runner" step. The [insights dashboard](https://app.stepsecurity.io/github/Seshadri724/BUILD-LENS/actions/runs/35874992597) showed 0 network events and 0 detections ~11 minutes after the run, although the agent log recorded the traffic below. Treat that as ingestion lag or onboarding, not a Harden-Runner blind spot; re-check before showing this to anyone.
+Source: the agent log in the job's "Post Harden-Runner" step (run #1), and the insights dashboard.
+
+- **Run #1 dashboard:** 0 destinations, 0 detections, still empty ~22 minutes after the run (`harden-runner-run1-empty.png`), although the agent log recorded the traffic below.
+- **[Run #2 dashboard](https://app.stepsecurity.io/github/Seshadri724/BUILD-LENS/actions/runs/35877972824):** 5 outbound destinations: github.com, api.github.com, release-assets.githubusercontent.com, registry.npmjs.org, **httpbin.org, status "Allowed"**. Detections: **0**. So on the second run, no baseline anomaly fired either (`harden-runner.png`).
 
 Outbound calls during the job (from the agent log):
 
@@ -46,7 +49,13 @@ BuildLens — findings, 1 findings, 1 unique dest hosts (ruleset 1.0.0)
 
 - One finding and no other alerts across the 174-package install. It names the package, the secret file and the process chain.
 - The destination is an IP; nothing says it is httpbin.org. (The IPs differ from Harden-Runner's because each tool ran on its own runner and got its own DNS answer.)
-- Bytes sent, elapsed time and lifecycle are in the step summary, not this log line: `<copy from the summary>`.
+- Run [#2](https://github.com/Seshadri724/BUILD-LENS/actions/runs/35877972824), after findings became workflow annotations (visible on the run page without signing in), reported the same finding with bytes:
+
+```text
+[critical] TAINTED_EGRESS | pkg: telemetry-helper | file: .../spike/fixtures/cp03-app/.env | dest: 18.213.21.177 | bytes sent: 760 | chain: bash → npm → sh → node
+```
+
+  760 bytes against a 123-byte `.env`: the count is everything the process sent to that destination, including the TLS handshake and HTTP headers. It shows data left, not how much of it was the secret.
 
 ## Side by side
 
@@ -56,14 +65,14 @@ BuildLens — findings, 1 findings, 1 unique dest hosts (ruleset 1.0.0)
 | Hostname or only IP? | **Hostname** | IP only |
 | Which dependency did it? | No: `node`, pid 2567 | **`telemetry-helper`** |
 | Did it touch a secret first? Which file? | No | **Yes: `cp03-app/.env`** |
-| How much data went out? | No | Step summary: `<n>` bytes |
+| How much data went out? | No | 760 bytes (run #2) |
 | Would I know what to remove from package.json? | No | Yes |
-| Raised as an alert on the first run? | No, a log line; its anomaly detection needs a baseline from earlier runs | **Yes, critical** |
+| Raised as an alert? | No, on either run: httpbin.org listed as "Allowed", 0 detections | **Yes, critical, both runs** |
 | Noise: other alerts in the same run | None | None |
 | Can it block the egress? | Yes (block mode) | No |
 | Catches known-bad destinations with no secret involved? | Yes (C2 blocklist) | No |
 
-`npm ci` wall time (single run each, noisy; CP-0.2 is the real overhead gate): baseline `__ ms` · BuildLens `__ ms` · Harden-Runner `__ ms`, from each job's step summary. npm itself reported "added 174 packages in 1s" with BuildLens and "in 2s" with Harden-Runner.
+`npm ci` wall time (single run each, noisy; CP-0.2 is the real overhead gate): from run #2: baseline **1,620 ms** · BuildLens **2,197 ms** (+36%) · Harden-Runner **3,090 ms** (+91%). One run each on different runners, so treat these as rough, but neither tool is free on a 1.6-second install.
 
 ## Known BuildLens gaps visible in this comparison
 
@@ -78,5 +87,5 @@ BuildLens — findings, 1 findings, 1 unique dest hosts (ruleset 1.0.0)
 3. **Would a skeptical AppSec engineer see why the second is worth paying for?** Not answered yet. This needs someone outside the project; record their exact words: ___
 
 **Open questions for the reviewer and the next run:**
-- From the second run on, Harden-Runner's baseline would likely flag httpbin.org as a new destination, with its hostname. Is "first run, names the package and the secret" enough on its own?
+- Harden-Runner didn't flag httpbin.org on run #2 either; its baseline may need more runs, or an allowlist in block mode. Would the reviewer say "I'd just set an egress allowlist"? That's the real competitor to BuildLens here, not audit mode.
 - The stronger case for taint tracking is exfiltration to a host that *is* in the baseline (a GitHub gist, the npm registry, a common CDN), which destination baselining can't catch. Test that next if the reviewer is lukewarm.
