@@ -158,11 +158,13 @@ func printSummary(m runschema.Manifest) {
 		}
 		line := fmt.Sprintf("[%s] %s | pkg: %s | file: %s | dest: %s | bytes sent: %s | chain: %s",
 			f.Severity, f.Rule, pkgName, f.Context.Path, f.Aggregatable.DestHost, bytesSent, chain)
-		fmt.Println("  • " + line)
-		// Workflow annotation: shows on the run page and PR checks, not just in logs.
+		// On Actions, the annotation line replaces the plain one: it still prints in
+		// the log, and also shows on the run page and PR checks.
 		if os.Getenv("GITHUB_ACTIONS") == "true" {
 			fmt.Printf("::error title=BuildLens %s::%s\n", f.Rule,
 				strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A").Replace(line))
+		} else {
+			fmt.Println("  • " + line)
 		}
 	}
 }
