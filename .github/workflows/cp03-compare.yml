@@ -1,0 +1,105 @@
+# CP-0.3: BuildLens vs Harden-Runner on the same build (spike/CP-0.3-CHECKLIST.md).
+# Three jobs run an identical `npm ci` of spike/fixtures/cp03-app, whose
+# `telemetry-helper` dependency posts a dummy .env to httpbin.org:
+#   baseline      — nothing attached (timing reference)
+#   buildlens     — this repo's Action
+#   harden-runner — StepSecurity Harden-Runner, audit mode (needs a PUBLIC repo on the free tier)
+# Evidence = each job's step summary. Screenshot them into spike/evidence/cp-0.3/.
+name: cp03-compare
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-agent:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Install BPF toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev
+          BPFTOOL_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/libbpf/bpftool/releases/latest \
+            | grep -o '"browser_download_url": *"[^"]*bpftool-[^"]*-amd64\.tar\.gz"' \
+            | head -1 | cut -d'"' -f4)
+          test -n "$BPFTOOL_URL" || (echo "failed to resolve bpftool release download URL" && exit 1)
+          curl -fsSL "$BPFTOOL_URL" -o /tmp/bpftool.tar.gz
+          sudo tar -xzf /tmp/bpftool.tar.gz -C /usr/local/bin
+          sudo chmod +x /usr/local/bin/bpftool
+      - name: Build bl-agent
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > pkg/agent/bpf/vmlinux.h
+          go mod tidy
+          (cd pkg/agent && go generate ./...)
+          go build -o bl-agent ./cmd/bl-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cp03-bl-agent
+          path: bl-agent
+
+  baseline:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: npm ci (nothing attached)
+        working-directory: spike/fixtures/cp03-app
+        run: |
+          START=$(date +%s%N)
+          npm ci --no-audit --no-fund
+          echo "**baseline** \`npm ci\`: $(( ($(date +%s%N) - START) / 1000000 )) ms" >> "$GITHUB_STEP_SUMMARY"
+
+  buildlens:
+    needs: build-agent
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/download-artifact@v4
+        with:
+          name: cp03-bl-agent
+          path: action/bin/linux-amd64
+      - run: chmod +x action/bin/linux-amd64/bl-agent
+      - name: BuildLens
+        uses: ./
+        with:
+          lockfile: spike/fixtures/cp03-app/package-lock.json
+      - name: npm ci (BuildLens attached)
+        working-directory: spike/fixtures/cp03-app
+        run: |
+          START=$(date +%s%N)
+          npm ci --no-audit --no-fund
+          echo "**buildlens** \`npm ci\`: $(( ($(date +%s%N) - START) / 1000000 )) ms" >> "$GITHUB_STEP_SUMMARY"
+      # BuildLens scores in its post step, after this job's last step, so the
+      # finding lands in this job's summary rather than in an artifact.
+
+  harden-runner:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Harden-Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: npm ci (Harden-Runner attached)
+        working-directory: spike/fixtures/cp03-app
+        run: |
+          START=$(date +%s%N)
+          npm ci --no-audit --no-fund
+          echo "**harden-runner** \`npm ci\`: $(( ($(date +%s%N) - START) / 1000000 )) ms" >> "$GITHUB_STEP_SUMMARY"

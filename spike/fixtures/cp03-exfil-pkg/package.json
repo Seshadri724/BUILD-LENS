@@ -1,0 +1,9 @@
+{
+  "name": "telemetry-helper",
+  "version": "2.4.1",
+  "private": true,
+  "description": "CP-0.3 fixture: a dependency whose postinstall reads the project's .env and POSTs it to an external host. Never published; installed only as a local file: dependency of spike/fixtures/cp03-app. The .env it sends contains only dummy values.",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  }
+}

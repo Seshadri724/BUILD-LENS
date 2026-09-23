@@ -6,14 +6,15 @@ This is manual by nature — it's a product comparison, not something a workflow
 
 ## Steps
 
-1. **Get BuildLens's side first, it's already built.** Download the `phase0-detection-proof` artifact from the latest `phase0-spike` run (or open the `detection-proof` job's log directly). It shows: a synthetic package reads `spike/fixtures/detection-demo/.env`, then POSTs it to a local listener, and the probe emits a `TAINTED_EGRESS` record tying the two together with the process, the file, the destination, and the elapsed milliseconds. Screenshot the log section between `--- raw probe events ---` and `M0.5 PASS`.
-2. Pick one real repo with a dependency that does something worth catching (a `postinstall` script is enough — doesn't need to be malicious for this test, just non-trivial). This can be a *different* repo than the one used for step 1 — the point of step 1 was proving the mechanism works at all; this step is about a realistic install.
-3. Install [Harden-Runner](https://github.com/step-security/harden-runner) on that repo. Run it once in audit mode. Screenshot the output.
-4. Answer, in writing, not just in your head:
+1. Make the repo public (Harden-Runner's free tier does not run on private repos).
+2. Actions → **cp03-compare** → Run workflow. It runs the same `npm ci` of `spike/fixtures/cp03-app` (real dependencies + one compromised `telemetry-helper` that sends a dummy `.env` to httpbin.org) three times: nothing attached, BuildLens, Harden-Runner in audit mode.
+3. Screenshot the BuildLens job summary and the Harden-Runner insights page (linked from its job summary). Save both in `spike/evidence/cp-0.3/`.
+4. Fill in [docs/harden-runner-comparison.md](../docs/harden-runner-comparison.md) with the real output, and answer in writing:
    - What did Harden-Runner's output tell you?
    - What did BuildLens's output tell you that Harden-Runner's didn't?
    - Would a skeptical AppSec engineer look at both screenshots and immediately see why the second is worth paying for?
-5. If the honest answer to the last question is no — stop building. Per ROADMAP.md, this is a "rethink positioning before writing production code" situation, not a "add more features" situation.
+5. Show both screenshots to one AppSec engineer who owes you nothing. Record their answer, not yours.
+6. If the honest answer to the last question is no — stop building. Per ROADMAP.md, this is a "rethink positioning before writing production code" situation, not a "add more features" situation.
 
 ## Evidence to keep
 
