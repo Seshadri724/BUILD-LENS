@@ -13,7 +13,7 @@ func record(args []string) error {
 	out := fs.String("out", "/tmp/buildlens/events.jsonl", "events output file")
 	duration := fs.Duration("duration", 0, "max capture duration (0 for until signal)")
 	debug := fs.Bool("debug", false, "stream raw events")
-	probes := fs.String("probes", "all", "which probes to attach (all, exec, open, connect)")
+	probes := fs.String("probes", "all", "which probes to attach (all, exec, open, connect, send)")
 	noJSON := fs.Bool("no-json", false, "disable json file output")
 	statsOut := fs.String("stats-out", "", "optional telemetry stats output file")
 	if err := fs.Parse(args); err != nil {

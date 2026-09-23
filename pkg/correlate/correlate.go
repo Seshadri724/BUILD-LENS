@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ruleTaintedEgress = "TAINTED_EGRESS"
+	ruleTaintedEgress  = "TAINTED_EGRESS"
 	defaultTaintWindow = 60 * 1e9 // 60 seconds in nanoseconds
 )
 
@@ -39,10 +39,10 @@ type procNode struct {
 }
 
 type taintMark struct {
-	path     string
-	tier     string
-	ts       int64
-	originPID uint32
+	path       string
+	tier       string
+	ts         int64
+	originPID  uint32
 	originComm string
 }
 
@@ -53,7 +53,19 @@ func Score(events []runschema.Event) runschema.Manifest {
 
 // ScoreWithOptions evaluates events deterministically with ancestor-process taint propagation.
 func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Manifest {
-	sorted := slices.Clone(events)
+	// Send totals are per-run aggregates, not points in time: pull them out of
+	// the timeline and attach them to findings by (pid, dest) afterwards.
+	sentBytes := map[string]uint64{}
+	haveSendTelemetry := false
+	sorted := make([]runschema.Event, 0, len(events))
+	for _, e := range events {
+		if e.Kind == "send" {
+			haveSendTelemetry = true
+			sentBytes[flowKey(e.PID, e.Dest)] += e.BytesSent
+			continue
+		}
+		sorted = append(sorted, e)
+	}
 	slices.SortFunc(sorted, cmpEvent)
 
 	taintWindow := opts.TaintWindowNano
@@ -184,6 +196,13 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 		}
 	}
 
+	if haveSendTelemetry {
+		for i := range findings {
+			n := sentBytes[flowKey(findings[i].Context.PID, findings[i].Context.Dest)]
+			findings[i].Aggregatable.BytesSent = &n
+		}
+	}
+
 	slices.SortFunc(findings, cmpFinding)
 
 	status := "clean"
@@ -201,6 +220,10 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 		AgentHealth:    opts.AgentHealth,
 		Findings:       findings,
 	}
+}
+
+func flowKey(pid uint32, dest string) string {
+	return fmt.Sprintf("%d|%s", pid, dest)
 }
 
 func computeFingerprint(rule, tier, host, pkg string) string {
@@ -261,7 +284,6 @@ func fileTier(path string) string {
 	}
 }
 
-
 func destHost(dest string) string {
 	if host, _, err := net.SplitHostPort(dest); err == nil {
 		return host
@@ -292,7 +314,7 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		if kind == "" || kind == "TAINTED_EGRESS" {
 			continue
 		}
-		if kind != "exec" && kind != "open" && kind != "connect" {
+		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" {
 			continue
 		}
 		ev := runschema.Event{Kind: kind}
@@ -320,6 +342,9 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		if cwd, ok := rec["cwd"].(string); ok {
 			ev.Cwd = cwd
 		}
+		if n, ok := rec["bytes_sent"].(float64); ok {
+			ev.BytesSent = uint64(n)
+		}
 		out = append(out, ev)
 	}
 }
@@ -335,4 +360,3 @@ func LoadJSONLFile(path string) ([]runschema.Event, error) {
 	defer f.Close()
 	return LoadJSONL(f)
 }
-

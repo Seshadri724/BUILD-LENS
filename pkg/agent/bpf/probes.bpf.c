@@ -11,6 +11,8 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define TASK_COMM_LEN 16
 #define MAX_PATH_LEN  128
+#define AF_INET       2
+#define AF_INET6      10
 
 enum event_kind {
 	EVT_EXEC    = 1,
@@ -24,9 +26,20 @@ struct event {
 	__u32 ppid;
 	char  comm[TASK_COMM_LEN];
 	char  path[MAX_PATH_LEN]; // EVT_OPEN only
-	__u8  daddr[4];           // EVT_CONNECT only, raw network-order octets
+	__u8  daddr[16];          // EVT_CONNECT only, raw network-order octets (IPv4 uses first 4)
 	__u8  dport[2];           // EVT_CONNECT only, raw network-order bytes
+	__u8  family;             // EVT_CONNECT only, AF_INET or AF_INET6
 } __attribute__((packed));
+
+// Per-(process, destination) bytes actually accepted by tcp_sendmsg.
+// Userspace dumps this map once at shutdown — no ring buffer event per send.
+struct flow_key {
+	__u32 pid;
+	__u8  daddr[16];
+	__u8  dport[2];
+	__u8  family;
+	__u8  pad;
+};
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -46,6 +59,32 @@ struct {
 	__type(key, __u32);   // tid
 	__type(value, __u64); // struct sock *
 } connect_socks SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);   // tid
+	__type(value, __u64); // struct sock *
+} send_socks SEC(".maps");
+
+// ponytail: fixed-size map; flows past 16384 per run are silently not counted.
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16384);
+	__type(key, struct flow_key);
+	__type(value, __u64); // bytes sent
+} send_bytes SEC(".maps");
+
+struct open_path {
+	char path[MAX_PATH_LEN];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32); // tid
+	__type(value, struct open_path);
+} pending_opens SEC(".maps");
 
 static __always_inline void record_drop(__u32 reason)
 {
@@ -121,30 +160,64 @@ SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_openat(struct trace_event_raw_sys_enter *ctx)
 {
 	const char *filename = (const char *)ctx->args[1];
-	char temp_path[MAX_PATH_LEN];
+	struct open_path op = {};
 
-	int len = bpf_probe_read_user_str(temp_path, sizeof(temp_path), filename);
+	int len = bpf_probe_read_user_str(op.path, sizeof(op.path), filename);
 	if (len <= 0)
 		return 0;
 
 	// Kernel-side filter: if not a sensitive pattern, exit immediately
-	if (!is_sensitive_path(temp_path, len))
+	if (!is_sensitive_path(op.path, len))
 		return 0;
+
+	// Emitted from sys_exit_openat only if the open succeeded.
+	__u32 tid = (__u32)bpf_get_current_pid_tgid();
+	bpf_map_update_elem(&pending_opens, &tid, &op, BPF_ANY);
+	return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_openat")
+int handle_openat_exit(struct trace_event_raw_sys_exit *ctx)
+{
+	__u32 tid = (__u32)bpf_get_current_pid_tgid();
+	struct open_path *op = bpf_map_lookup_elem(&pending_opens, &tid);
+
+	if (!op)
+		return 0;
+	if (ctx->ret < 0) {
+		bpf_map_delete_elem(&pending_opens, &tid);
+		return 0;
+	}
 
 	struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e) {
 		record_drop(0);
+		bpf_map_delete_elem(&pending_opens, &tid);
 		return 0;
 	}
 
 	fill_common(e, EVT_OPEN);
-	__builtin_memcpy(e->path, temp_path, sizeof(e->path));
+	__builtin_memcpy(e->path, op->path, sizeof(e->path));
+	bpf_map_delete_elem(&pending_opens, &tid);
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
 
-SEC("kprobe/tcp_v4_connect")
-int BPF_KPROBE(handle_tcp_connect_entry, struct sock *sk)
+// Reads family, destination address and port from a connected/connecting sock.
+// BPF_CORE_READ_INTO sizes the read by sizeof(*dst), so casts pick the width.
+static __always_inline __u8 read_dest(struct sock *sk, __u8 *daddr, __u8 *dport)
+{
+	__u8 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+
+	if (family == AF_INET6)
+		BPF_CORE_READ_INTO((struct in6_addr *)daddr, sk, __sk_common.skc_v6_daddr);
+	else
+		BPF_CORE_READ_INTO((__u32 *)daddr, sk, __sk_common.skc_daddr);
+	BPF_CORE_READ_INTO((__u16 *)dport, sk, __sk_common.skc_dport);
+	return family;
+}
+
+static __always_inline int connect_entry(struct sock *sk)
 {
 	__u32 tid = (__u32)bpf_get_current_pid_tgid();
 	__u64 skp = (__u64)sk;
@@ -153,17 +226,18 @@ int BPF_KPROBE(handle_tcp_connect_entry, struct sock *sk)
 	return 0;
 }
 
-SEC("kretprobe/tcp_v4_connect")
-int BPF_KRETPROBE(handle_tcp_connect_return, int ret)
+static __always_inline int connect_return(int ret)
 {
 	__u32 tid = (__u32)bpf_get_current_pid_tgid();
 	__u64 *skp = bpf_map_lookup_elem(&connect_socks, &tid);
 
 	if (!skp)
 		return 0;
-	bpf_map_delete_elem(&connect_socks, &tid);
-
 	struct sock *sk = (struct sock *)(*skp);
+	bpf_map_delete_elem(&connect_socks, &tid);
+	if (ret != 0)
+		return 0;
+
 	struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e) {
 		record_drop(0);
@@ -171,8 +245,75 @@ int BPF_KRETPROBE(handle_tcp_connect_return, int ret)
 	}
 
 	fill_common(e, EVT_CONNECT);
-	BPF_CORE_READ_INTO(&e->daddr, sk, __sk_common.skc_daddr);
-	BPF_CORE_READ_INTO(&e->dport, sk, __sk_common.skc_dport);
+	e->family = read_dest(sk, e->daddr, e->dport);
 	bpf_ringbuf_submit(e, 0);
+	return 0;
+}
+
+SEC("kprobe/tcp_v4_connect")
+int BPF_KPROBE(handle_tcp_connect_entry, struct sock *sk)
+{
+	return connect_entry(sk);
+}
+
+SEC("kretprobe/tcp_v4_connect")
+int BPF_KRETPROBE(handle_tcp_connect_return, int ret)
+{
+	return connect_return(ret);
+}
+
+// tcp_v6_connect calls tcp_v4_connect for v4-mapped addresses; the inner
+// probe pair consumes the map entry, so each connect is emitted once.
+SEC("kprobe/tcp_v6_connect")
+int BPF_KPROBE(handle_tcp6_connect_entry, struct sock *sk)
+{
+	return connect_entry(sk);
+}
+
+SEC("kretprobe/tcp_v6_connect")
+int BPF_KRETPROBE(handle_tcp6_connect_return, int ret)
+{
+	return connect_return(ret);
+}
+
+SEC("kprobe/tcp_sendmsg")
+int BPF_KPROBE(handle_tcp_sendmsg_entry, struct sock *sk)
+{
+	__u32 tid = (__u32)bpf_get_current_pid_tgid();
+	__u64 skp = (__u64)sk;
+
+	bpf_map_update_elem(&send_socks, &tid, &skp, BPF_ANY);
+	return 0;
+}
+
+SEC("kretprobe/tcp_sendmsg")
+int BPF_KRETPROBE(handle_tcp_sendmsg_return, int ret)
+{
+	__u32 tid = (__u32)bpf_get_current_pid_tgid();
+	__u64 *skp = bpf_map_lookup_elem(&send_socks, &tid);
+
+	if (!skp)
+		return 0;
+	struct sock *sk = (struct sock *)(*skp);
+	bpf_map_delete_elem(&send_socks, &tid);
+	if (ret <= 0)
+		return 0;
+
+	struct flow_key key = {};
+	key.pid = bpf_get_current_pid_tgid() >> 32;
+	key.family = read_dest(sk, key.daddr, key.dport);
+
+	__u64 *total = bpf_map_lookup_elem(&send_bytes, &key);
+	if (total) {
+		__sync_fetch_and_add(total, (__u64)ret);
+	} else {
+		__u64 init = (__u64)ret;
+		// Lost the insert race to another thread: add to its entry instead.
+		if (bpf_map_update_elem(&send_bytes, &key, &init, BPF_NOEXIST) != 0) {
+			total = bpf_map_lookup_elem(&send_bytes, &key);
+			if (total)
+				__sync_fetch_and_add(total, (__u64)ret);
+		}
+	}
 	return 0;
 }

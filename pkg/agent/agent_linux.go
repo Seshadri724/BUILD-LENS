@@ -83,6 +83,12 @@ func Record(opts RecordOptions) error {
 			return fmt.Errorf("attach openat tracepoint: %w", err)
 		}
 		defer openTp.Close()
+
+		openExitTp, err := link.Tracepoint("syscalls", "sys_exit_openat", objs.HandleOpenatExit, nil)
+		if err != nil {
+			return fmt.Errorf("attach openat exit tracepoint: %w", err)
+		}
+		defer openExitTp.Close()
 	}
 
 	if probes == "all" || probes == "connect" {
@@ -97,6 +103,32 @@ func Record(opts RecordOptions) error {
 			return fmt.Errorf("attach tcp_v4_connect kretprobe: %w", err)
 		}
 		defer connectReturn.Close()
+
+		connect6Entry, err := link.Kprobe("tcp_v6_connect", objs.HandleTcp6ConnectEntry, nil)
+		if err != nil {
+			return fmt.Errorf("attach tcp_v6_connect kprobe: %w", err)
+		}
+		defer connect6Entry.Close()
+
+		connect6Return, err := link.Kretprobe("tcp_v6_connect", objs.HandleTcp6ConnectReturn, nil)
+		if err != nil {
+			return fmt.Errorf("attach tcp_v6_connect kretprobe: %w", err)
+		}
+		defer connect6Return.Close()
+	}
+
+	if probes == "all" || probes == "send" {
+		sendEntry, err := link.Kprobe("tcp_sendmsg", objs.HandleTcpSendmsgEntry, nil)
+		if err != nil {
+			return fmt.Errorf("attach tcp_sendmsg kprobe: %w", err)
+		}
+		defer sendEntry.Close()
+
+		sendReturn, err := link.Kretprobe("tcp_sendmsg", objs.HandleTcpSendmsgReturn, nil)
+		if err != nil {
+			return fmt.Errorf("attach tcp_sendmsg kretprobe: %w", err)
+		}
+		defer sendReturn.Close()
 	}
 
 	rd, err := ringbuf.NewReader(objs.Events)
@@ -143,7 +175,7 @@ func Record(opts RecordOptions) error {
 	}()
 
 	var counts struct {
-		exec, open, connect, dropped uint64
+		exec, open, connect, send, dropped uint64
 	}
 
 	for {
@@ -208,7 +240,7 @@ func Record(opts RecordOptions) error {
 
 		case evtConnect:
 			counts.connect++
-			dest := net.IP(ev.Daddr[:]).String() + ":" + fmt.Sprint(binary.BigEndian.Uint16(ev.Dport[:]))
+			dest := formatDest(ev.Family, ev.Daddr, ev.Dport)
 			e := runschema.Event{
 				Kind: "connect",
 				TS:   nowNano,
@@ -228,6 +260,33 @@ func Record(opts RecordOptions) error {
 
 	<-doneReader
 
+	// Per-(pid, destination) byte totals, emitted once at shutdown.
+	if probes == "all" || probes == "send" {
+		var k flowKey
+		var sent uint64
+		nowNano := time.Now().UnixNano()
+		iter := objs.SendBytes.Iterate()
+		for iter.Next(&k, &sent) {
+			counts.send++
+			e := runschema.Event{
+				Kind:      "send",
+				TS:        nowNano,
+				PID:       k.PID,
+				Dest:      formatDest(k.Family, k.Daddr, k.Dport),
+				BytesSent: sent,
+			}
+			if opts.Debug {
+				log.Printf("[debug] send pid=%d dest=%s bytes=%d", e.PID, e.Dest, e.BytesSent)
+			}
+			if enc != nil {
+				_ = enc.Encode(e)
+			}
+		}
+		if err := iter.Err(); err != nil {
+			log.Printf("send_bytes map iteration error: %v", err)
+		}
+	}
+
 	var ringBufferDrops uint64
 	if objs.DropStats != nil {
 		var key uint32 = 0
@@ -243,8 +302,8 @@ func Record(opts RecordOptions) error {
 	}
 
 	elapsed := time.Since(startTime)
-	log.Printf("BuildLens agent: finished in %s. Events: %d exec, %d open, %d connect (drops: %d)",
-		elapsed, counts.exec, counts.open, counts.connect, ringBufferDrops)
+	log.Printf("BuildLens agent: finished in %s. Events: %d exec, %d open, %d connect, %d send flows (drops: %d)",
+		elapsed, counts.exec, counts.open, counts.connect, counts.send, ringBufferDrops)
 
 	// Write shutdown marker
 	_ = os.WriteFile(donePath, []byte("done\n"), 0o644)
@@ -253,7 +312,7 @@ func Record(opts RecordOptions) error {
 		cpuTime, _ := ReadProcessCPUTimeMs(os.Getpid())
 		st := AgentStats{
 			RuntimeMS:       elapsed.Milliseconds(),
-			EventsTotal:     int(counts.exec + counts.open + counts.connect),
+			EventsTotal:     int(counts.exec + counts.open + counts.connect + counts.send),
 			RingBufferDrops: ringBufferDrops,
 			FileSize:        fileSize,
 			AgentCPUTimeMS:  cpuTime,
@@ -261,6 +320,7 @@ func Record(opts RecordOptions) error {
 				"exec":    int(counts.exec),
 				"open":    int(counts.open),
 				"connect": int(counts.connect),
+				"send":    int(counts.send),
 			},
 		}
 		if b, err := json.MarshalIndent(st, "", "  "); err == nil {
@@ -269,6 +329,16 @@ func Record(opts RecordOptions) error {
 	}
 
 	return nil
+}
+
+const afInet6 = 10
+
+func formatDest(family uint8, daddr [16]byte, dport [2]byte) string {
+	ip := net.IP(daddr[:4])
+	if family == afInet6 {
+		ip = net.IP(daddr[:])
+	}
+	return net.JoinHostPort(ip.String(), fmt.Sprint(binary.BigEndian.Uint16(dport[:])))
 }
 
 func cString(b []byte) string {

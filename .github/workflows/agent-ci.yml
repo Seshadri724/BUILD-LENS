@@ -189,6 +189,11 @@ jobs:
           grep -q '"dest_host": *"127.0.0.1"' buildlens-manifest.json || (echo "Expected dest host 127.0.0.1" && exit 1)
           grep -q '"file_tier": *"env"' buildlens-manifest.json || (echo "Expected file tier 'env'" && exit 1)
 
+          # Verify the probe measured the exfiltrated payload, not just a connect attempt
+          BYTES=$(grep -o '"bytes_sent": *[0-9]*' buildlens-manifest.json | head -1 | grep -o '[0-9]*$')
+          test -n "$BYTES" && [ "$BYTES" -gt 0 ] || (echo "Expected bytes_sent > 0, got '${BYTES}'" && exit 1)
+          echo "bytes_sent=$BYTES"
+
           # Verify SARIF output
           grep -q '"TAINTED_EGRESS"' buildlens.sarif || (echo "Expected TAINTED_EGRESS in SARIF" && exit 1)
           echo "Live end-to-end agent probe capture and attribution verified!"

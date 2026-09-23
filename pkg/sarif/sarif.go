@@ -98,11 +98,12 @@ func FromManifest(m runschema.Manifest) logFile {
 			"Sensitive file: %s\n"+
 			"Process chain: %s\n"+
 			"Destination: %s\n"+
+			"Bytes sent: %s\n"+
 			"Elapsed time: %d ms\n"+
 			"Confidence: %s\n\n"+
 			"Recommended action:\n"+
 			"Remove the dependency and regenerate package-lock.json.",
-			pkgDisplay, lifecycle, f.Context.Path, chain, f.Aggregatable.DestHost, f.Aggregatable.ElapsedMS, confidence)
+			pkgDisplay, lifecycle, f.Context.Path, chain, f.Aggregatable.DestHost, bytesSent(f), f.Aggregatable.ElapsedMS, confidence)
 
 		fp := f.Context.Fingerprint
 		if fp == "" {
@@ -202,6 +203,7 @@ func GenerateStepSummary(m runschema.Manifest) string {
 		sb.WriteString(fmt.Sprintf("- **Sensitive File:** `%s` (%s)\n", f.Context.Path, f.Aggregatable.FileTier))
 		sb.WriteString(fmt.Sprintf("- **Process Chain:** `%s`\n", chain))
 		sb.WriteString(fmt.Sprintf("- **Destination:** `%s`\n", f.Aggregatable.DestHost))
+		sb.WriteString(fmt.Sprintf("- **Bytes Sent:** `%s`\n", bytesSent(f)))
 		sb.WriteString(fmt.Sprintf("- **Elapsed Time:** `%d ms`\n", f.Aggregatable.ElapsedMS))
 		sb.WriteString(fmt.Sprintf("- **Confidence:** `%s (%s)`\n\n", confidence, confidencePct))
 		sb.WriteString("**Recommended Action:**\n")
@@ -210,6 +212,13 @@ func GenerateStepSummary(m runschema.Manifest) string {
 	}
 
 	return sb.String()
+}
+
+func bytesSent(f runschema.Finding) string {
+	if f.Aggregatable.BytesSent == nil {
+		return "not measured"
+	}
+	return fmt.Sprint(*f.Aggregatable.BytesSent)
 }
 
 func WriteFile(path string, m runschema.Manifest) error {

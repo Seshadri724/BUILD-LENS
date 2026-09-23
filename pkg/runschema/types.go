@@ -55,6 +55,9 @@ type Event struct {
 	Dest    string `json:"dest,omitempty"`
 	Cmdline string `json:"cmdline,omitempty"`
 	Cwd     string `json:"cwd,omitempty"`
+	// BytesSent is set on "send" events: total bytes the kernel accepted from
+	// PID for Dest over the whole run (tcp_sendmsg return values).
+	BytesSent uint64 `json:"bytes_sent,omitempty"`
 }
 
 // AgentHealth reports telemetry, event drops, and degradation status.
@@ -72,15 +75,18 @@ type FindingAgg struct {
 	DestHost  string    `json:"dest_host"`
 	FileTier  string    `json:"file_tier"`
 	ElapsedMS int64     `json:"elapsed_ms"`
+	// BytesSent is nil when the run has no send telemetry (probe not attached
+	// or old recording), so "not measured" is never reported as 0.
+	BytesSent *uint64 `json:"bytes_sent,omitempty"`
 }
 
 // FindingContext is repo-identifying. Must not enter aggregate pipelines.
 type FindingContext struct {
-	PID          uint32   `json:"pid"`
-	Comm         string   `json:"comm"`
-	Path         string   `json:"path"`
-	Dest         string   `json:"dest"`
-	ProcessChain []string `json:"process_chain,omitempty"`
+	PID          uint32      `json:"pid"`
+	Comm         string      `json:"comm"`
+	Path         string      `json:"path"`
+	Dest         string      `json:"dest"`
+	ProcessChain []string    `json:"process_chain,omitempty"`
 	Cmdline      string      `json:"cmdline,omitempty"`
 	Cwd          string      `json:"cwd,omitempty"`
 	Fingerprint  string      `json:"fingerprint,omitempty"`
@@ -102,4 +108,3 @@ type Manifest struct {
 	AgentHealth    AgentHealth `json:"agent_health"`
 	Findings       []Finding   `json:"findings"`
 }
-

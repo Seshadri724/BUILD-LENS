@@ -22,15 +22,17 @@ BuildLens watches runtime behavior.
 
 ```mermaid
 graph LR
-    A["Malicious postinstall<br/>reads .env"] -->|"security_file_open"| K["eBPF probes"]
-    A -->|"tcp_connect + sendmsg"| K
+    A["Malicious postinstall<br/>reads .env"] -->|"openat (successful)"| K["eBPF probes"]
+    A -->|"tcp_v4/v6_connect + tcp_sendmsg"| K
     K --> C["Taint correlator<br/>read → send within window"]
     C --> F["Finding:<br/>TAINTED_EGRESS critical"]
     F --> G["PR check + SARIF<br/>+ signed run manifest"]
     F -.->|"enforce mode"| B["cgroup/connect<br/>blocks the egress"]
 ```
 
-Kernel probes capture process execs, sensitive file opens, DNS queries, TLS SNI, and per-socket byte counts. A userspace correlator builds a taint graph — *this process read a credential, this same process then sent 1.2 KB to a host we've never seen* — and scores the result. Findings land on the PR as a check run and in GitHub code scanning as SARIF, within sixty seconds of the run ending.
+Kernel probes capture process execs, successful opens of sensitive files, outbound TCP connects (IPv4 and IPv6), and bytes sent per process and destination. A userspace correlator builds a taint graph — *this process opened a credential, this same process then sent 1.2 KB to that IP* — and scores the result.
+
+**What the probes do *not* do yet:** destinations are raw IPs (no DNS or TLS SNI hostname mapping); a successful `open` is evidence of access, not proof the bytes were read; only `openat` is hooked (not `open`/`openat2`), and UDP egress is not observed. "Bytes sent" is what the kernel accepted from that process for that destination over the whole run, not proof those bytes were the file contents. Findings land on the PR as a check run and in GitHub code scanning as SARIF, within sixty seconds of the run ending.
 
 **We never read file contents or network payloads.** Only paths, sizes, hashes, destinations, and byte counts leave the runner. That constraint is permanent — it is what makes the tool deployable without a MITM CA in every language runtime's trust store.
 
@@ -78,7 +80,7 @@ Read them in that order. PRD defines what and why, STRATEGY defines why it compo
 
 **Phase 0 mechanism: pass (CP-0.1, CP-0.2).** eBPF loads on GitHub-hosted `ubuntu-22.04` / `24.04`. Overhead of the *exec-only* attach-once probe was ~0% on a tiny `npm ci` — re-measure once the full probe set exists. **CP-0.3 (vs Harden-Runner) is still a human judgment call.**
 
-**Phase 1 started — output path, not the full agent.** `bl-agent score` turns spike JSONL into a versioned manifest + SARIF (`TAINTED_EGRESS`, fail-open, replay-stable). Package attribution is still `unknown`. Next: wire the spike into the Action as `main`/`post`, then real probes (DNS/SNI, ancestor taint, npm/pip identity).
+**Phase 1 — working agent, narrow probe set.** `bl-agent record` runs as the Action's `main`/`post` and captures exec, successful sensitive-file opens, IPv4/IPv6 TCP connects, and per-destination bytes sent. `bl-agent score` produces a versioned manifest + SARIF (`TAINTED_EGRESS`, fail-open, replay-stable) with ancestor-process taint and npm package attribution from the lockfile. CI verifies this end to end against a synthetic exfiltrating `postinstall`, including `bytes_sent > 0`. Not built: DNS/SNI hostnames, pip attribution, enforcement.
 
 ---
 

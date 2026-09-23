@@ -197,7 +197,6 @@ func TestAgentHealthDegradation(t *testing.T) {
 	}
 }
 
-
 func scoreFile(t *testing.T, name string) runschema.Manifest {
 	t.Helper()
 	return correlate.Score(load(t, name))
@@ -216,4 +215,26 @@ func load(t *testing.T, name string) []runschema.Event {
 		t.Fatal(err)
 	}
 	return events
+}
+
+func TestBytesSentAttachedToFinding(t *testing.T) {
+	events := []runschema.Event{
+		{Kind: "open", TS: 1000, PID: 7, PPID: 1, Comm: "node", Path: "/repo/.env"},
+		{Kind: "connect", TS: 2000, PID: 7, PPID: 1, Comm: "node", Dest: "[2001:db8::1]:443"},
+		{Kind: "send", TS: 9000, PID: 7, Dest: "[2001:db8::1]:443", BytesSent: 1204},
+		{Kind: "send", TS: 9000, PID: 8, Dest: "[2001:db8::1]:443", BytesSent: 99},
+	}
+	m := correlate.Score(events)
+	if len(m.Findings) != 1 {
+		t.Fatalf("findings=%d", len(m.Findings))
+	}
+	if b := m.Findings[0].Aggregatable.BytesSent; b == nil || *b != 1204 {
+		t.Fatalf("bytes_sent=%v", b)
+	}
+
+	// No send telemetry at all: bytes are unknown, not zero.
+	m = correlate.Score(events[:2])
+	if b := m.Findings[0].Aggregatable.BytesSent; b != nil {
+		t.Fatalf("bytes_sent should be nil without telemetry, got %d", *b)
+	}
 }
