@@ -9,7 +9,7 @@ This is manual by nature — it's a product comparison, not something a workflow
 1. Make the repo public (Harden-Runner's free tier does not run on private repos).
 2. Actions → **cp03-compare** → Run workflow. It runs the same `npm ci` of `spike/fixtures/cp03-app` (real dependencies + one compromised `telemetry-helper` that sends a dummy `.env` to httpbin.org) three times: nothing attached, BuildLens, Harden-Runner in audit mode.
 3. Screenshot the BuildLens job summary and the Harden-Runner insights page (linked from its job summary). Save both in `spike/evidence/cp-0.3/`.
-4. Fill in [docs/harden-runner-comparison.md](../docs/harden-runner-comparison.md) with the real output, and answer in writing:
+4. Fill in [harden-runner-comparison.md](../harden-runner-comparison.md) with the real output, and answer in writing:
    - What did Harden-Runner's output tell you?
    - What did BuildLens's output tell you that Harden-Runner's didn't?
    - Would a skeptical AppSec engineer look at both screenshots and immediately see why the second is worth paying for?

@@ -54,7 +54,7 @@ jobs:
 
 That is the entire integration. No changes to `package.json`, no changes to build commands, no proxy configuration. If the agent cannot load — unsupported kernel, missing capability — it logs a warning and exits 0. **A security tool that breaks builds gets uninstalled by Friday.**
 
-**Today (this repo):** score a JSONL event file with the composite action — see [docs/quickstart.md](docs/quickstart.md). Kernel attach is still the Phase 0 spike.
+**Today (this repo):** score a JSONL event file with the composite action — see [quickstart.md](quickstart.md). Kernel attach is still the Phase 0 spike.
 
 ---
 
@@ -62,7 +62,7 @@ That is the entire integration. No changes to `package.json`, no changes to buil
 
 | Document | What it covers |
 |---|---|
-| [docs/quickstart.md](docs/quickstart.md) | Score events locally and via the GitHub Action (current ship path) |
+| [quickstart.md](quickstart.md) | Score events locally and via the GitHub Action (current ship path) |
 | [NEXT_STEPS.md](NEXT_STEPS.md) | What to do this week vs the engineering queue |
 | [PRD.md](PRD.md) | Problem, goals, non-goals, personas, competitive positioning, requirements, user stories with acceptance criteria, risks |
 | [STRATEGY.md](STRATEGY.md) | Why this is a company rather than a tool: the cross-fleet behavioral corpus, where AI earns its place and where it doesn't, market expansion, business model |
