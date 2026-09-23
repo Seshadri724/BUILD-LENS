@@ -152,8 +152,18 @@ func printSummary(m runschema.Manifest) {
 		if chain == "" {
 			chain = f.Context.Comm
 		}
-		fmt.Printf("  • [%s] %s | pkg: %s | file: %s | dest: %s | chain: %s\n",
-			f.Severity, f.Rule, pkgName, f.Context.Path, f.Aggregatable.DestHost, chain)
+		bytesSent := "not measured"
+		if f.Aggregatable.BytesSent != nil {
+			bytesSent = fmt.Sprint(*f.Aggregatable.BytesSent)
+		}
+		line := fmt.Sprintf("[%s] %s | pkg: %s | file: %s | dest: %s | bytes sent: %s | chain: %s",
+			f.Severity, f.Rule, pkgName, f.Context.Path, f.Aggregatable.DestHost, bytesSent, chain)
+		fmt.Println("  • " + line)
+		// Workflow annotation: shows on the run page and PR checks, not just in logs.
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			fmt.Printf("::error title=BuildLens %s::%s\n", f.Rule,
+				strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A").Replace(line))
+		}
 	}
 }
 

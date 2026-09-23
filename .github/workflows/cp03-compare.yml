@@ -4,7 +4,8 @@
 #   baseline      — nothing attached (timing reference)
 #   buildlens     — this repo's Action
 #   harden-runner — StepSecurity Harden-Runner, audit mode (needs a PUBLIC repo on the free tier)
-# Evidence = each job's step summary. Screenshot them into spike/evidence/cp-0.3/.
+# Evidence = each job's step summary. Timings and BuildLens findings are also
+# annotations, which the run page shows even to signed-out viewers. Screenshot them into spike/evidence/cp-0.3/.
 name: cp03-compare
 
 on:
@@ -65,7 +66,9 @@ jobs:
         run: |
           START=$(date +%s%N)
           npm ci --no-audit --no-fund
-          echo "**baseline** \`npm ci\`: $(( ($(date +%s%N) - START) / 1000000 )) ms" >> "$GITHUB_STEP_SUMMARY"
+          MS=$(( ($(date +%s%N) - START) / 1000000 ))
+          echo "**baseline** \`npm ci\`: $MS ms" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=npm ci timing::baseline $MS ms"
 
   buildlens:
     needs: build-agent
@@ -89,7 +92,9 @@ jobs:
         run: |
           START=$(date +%s%N)
           npm ci --no-audit --no-fund
-          echo "**buildlens** \`npm ci\`: $(( ($(date +%s%N) - START) / 1000000 )) ms" >> "$GITHUB_STEP_SUMMARY"
+          MS=$(( ($(date +%s%N) - START) / 1000000 ))
+          echo "**buildlens** \`npm ci\`: $MS ms" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=npm ci timing::buildlens $MS ms"
       # BuildLens scores in its post step, after this job's last step, so the
       # finding lands in this job's summary rather than in an artifact.
 
@@ -109,4 +114,6 @@ jobs:
         run: |
           START=$(date +%s%N)
           npm ci --no-audit --no-fund
-          echo "**harden-runner** \`npm ci\`: $(( ($(date +%s%N) - START) / 1000000 )) ms" >> "$GITHUB_STEP_SUMMARY"
+          MS=$(( ($(date +%s%N) - START) / 1000000 ))
+          echo "**harden-runner** \`npm ci\`: $MS ms" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=npm ci timing::harden-runner $MS ms"
