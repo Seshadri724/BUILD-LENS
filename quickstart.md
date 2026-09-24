@@ -21,16 +21,15 @@ permissions:
   contents: read
 
 jobs:
-  observe:
+  build:
     runs-on: ubuntu-latest
     steps:
+      - uses: Seshadri724/BUILD-LENS@v0.1.0
       - uses: actions/checkout@v4
-      - uses: ./
-        with:
-          events: testdata/corpus/tainted-env-post/events.jsonl
+      - run: npm ci && npm test
 ```
 
-Missing `events` file: the action writes a clean manifest and **exits 0** (fail-open).
+The action records live kernel events for the whole job and scores them in its post step. If the agent can't load (see the runner requirements in the [README](README.md#runner-requirements)), it warns and **exits 0** (fail-open).
 
 ## Spike JSONL → product finding
 

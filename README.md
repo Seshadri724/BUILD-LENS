@@ -38,23 +38,45 @@ Kernel probes capture process execs, successful opens of sensitive files, outbou
 
 ---
 
-## Installation (target UX)
+## Installation (early preview)
 
 ```yaml
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: buildlens/agent@v1
-        with:
-          mode: observe        # observe | enforce
+      - uses: Seshadri724/BUILD-LENS@v0.1.0   # first step, before your build
       - uses: actions/checkout@v4
       - run: npm ci && npm test
 ```
 
-That is the entire integration. No changes to `package.json`, no changes to build commands, no proxy configuration. If the agent cannot load — unsupported kernel, missing capability — it logs a warning and exits 0. **A security tool that breaks builds gets uninstalled by Friday.**
+That is the entire integration. No changes to `package.json`, no changes to build commands, no proxy configuration. The agent starts in the first step; its post step scores the run at the end of the job, even if the job failed. Findings appear as error annotations on the run page and in the job's step summary; the manifest (`buildlens-manifest.json`) and SARIF (`buildlens.sarif`) are written to the workspace.
 
-**Today (this repo):** score a JSONL event file with the composite action — see [quickstart.md](quickstart.md). Kernel attach is still the Phase 0 spike.
+If the agent cannot load — unsupported runner, missing BTF, no passwordless sudo — it logs a warning and exits 0. **A security tool that breaks builds gets uninstalled by Friday.**
+
+Pin a release tag (`@v0.1.0`) or the moving `@v0` tag, not a branch. Each release tag contains the prebuilt agent; its SHA-256 is on the [release page](https://github.com/Seshadri724/BUILD-LENS/releases).
+
+### Runner requirements
+
+| Requirement | Why | If missing |
+|---|---|---|
+| Linux x86-64 runner (GitHub-hosted `ubuntu-22.04` is tested end to end; `ubuntu-24.04` passed the Phase 0 load check) | eBPF; only a `linux-amd64` agent is built | warning, exit 0, nothing monitored |
+| Kernel with BTF (`/sys/kernel/btf/vmlinux`, kernel 5.8+) | CO-RE probes | warning, exit 0 |
+| Passwordless `sudo -n` | loading eBPF needs root | warning, exit 0 |
+| `package-lock.json` in the workspace root (or set `lockfile:`) | names the npm package | findings say `unknown` package |
+
+Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, DNS/TLS hostnames (destinations are IPs), blocking, and secrets held only in environment variables (see *Honest limitations*).
+
+### Inputs
+
+| Input | Default | |
+|---|---|---|
+| `lockfile` | `package-lock.json` | lockfile used to attribute processes to npm packages |
+| `manifest` | `buildlens-manifest.json` | where to write the run manifest |
+| `sarif` | `buildlens.sarif` | where to write SARIF |
+| `debug` | `false` | also keep every raw event |
+
+To score a recorded event file locally without a kernel, see [quickstart.md](quickstart.md).
 
 ---
 
@@ -123,4 +145,4 @@ The difference: Harden-Runner tells you a build contacted an unknown host. Build
 
 ## License
 
-TBD. Open-sourcing the agent is under active consideration ([PRD §12](PRD.md#12-open-questions)) — auditability matters enormously for software that requests kernel access, and it would make the control plane the product.
+[Apache-2.0](LICENSE). The in-kernel eBPF programs (`*.bpf.c`) are dual-licensed BSD/GPL, as the kernel requires for GPL-only BPF helpers. Auditability matters for software that requests kernel access.
