@@ -92,7 +92,7 @@ func FromManifest(m runschema.Manifest) logFile {
 			confidence = "unknown"
 		}
 
-		msg := fmt.Sprintf("Critical: dependency credential access\n\n"+
+		msg := fmt.Sprintf("%s\n\n"+
 			"Package: %s\n"+
 			"Lifecycle: %s\n"+
 			"Sensitive file: %s\n"+
@@ -103,7 +103,7 @@ func FromManifest(m runschema.Manifest) logFile {
 			"Confidence: %s\n\n"+
 			"Recommended action:\n"+
 			"Remove the dependency and regenerate package-lock.json.",
-			pkgDisplay, lifecycle, f.Context.Path, chain, destDisplay(f), bytesSent(f), f.Aggregatable.ElapsedMS, confidence)
+			headline(f), pkgDisplay, lifecycle, fileDisplay(f), chain, destDisplay(f), bytesSent(f), f.Aggregatable.ElapsedMS, confidence)
 
 		fp := f.Context.Fingerprint
 		if fp == "" {
@@ -121,7 +121,7 @@ func FromManifest(m runschema.Manifest) logFile {
 
 		results = append(results, result{
 			RuleID:    f.Rule,
-			Level:     "error",
+			Level:     level(f),
 			Message:   text{Text: msg},
 			Locations: locs,
 			PartialFingerprints: map[string]string{
@@ -145,6 +145,9 @@ func FromManifest(m runschema.Manifest) logFile {
 				}, {
 					ID:               "PROCESS_MEMORY_READ",
 					ShortDescription: text{Text: "Process read another process's memory or environment"},
+				}, {
+					ID:               "INSTALL_SCRIPT_EGRESS",
+					ShortDescription: text{Text: "Dependency install script contacted a host other than the package registry"},
 				}},
 			}},
 			Results: results,
@@ -203,7 +206,9 @@ func GenerateStepSummary(m runschema.Manifest) string {
 		if lifecycle != "" {
 			sb.WriteString(fmt.Sprintf("- **Lifecycle:** `%s`\n", lifecycle))
 		}
-		sb.WriteString(fmt.Sprintf("- **Sensitive File:** `%s` (%s)\n", f.Context.Path, f.Aggregatable.FileTier))
+		if f.Context.Path != "" {
+			sb.WriteString(fmt.Sprintf("- **Sensitive File:** `%s` (%s)\n", f.Context.Path, f.Aggregatable.FileTier))
+		}
 		sb.WriteString(fmt.Sprintf("- **Process Chain:** `%s`\n", chain))
 		sb.WriteString(fmt.Sprintf("- **Destination:** `%s`\n", destDisplay(f)))
 		sb.WriteString(fmt.Sprintf("- **Bytes Sent:** `%s`\n", bytesSent(f)))
@@ -215,6 +220,30 @@ func GenerateStepSummary(m runschema.Manifest) string {
 	}
 
 	return sb.String()
+}
+
+func headline(f runschema.Finding) string {
+	switch f.Rule {
+	case "PROCESS_MEMORY_READ":
+		return "Critical: dependency read another process's memory or environment"
+	case "INSTALL_SCRIPT_EGRESS":
+		return "High: dependency install script contacted an unexpected host"
+	}
+	return "Critical: dependency credential access"
+}
+
+func level(f runschema.Finding) string {
+	if f.Severity == "critical" {
+		return "error"
+	}
+	return "warning"
+}
+
+func fileDisplay(f runschema.Finding) string {
+	if f.Context.Path == "" {
+		return "none"
+	}
+	return f.Context.Path
 }
 
 func destDisplay(f runschema.Finding) string {

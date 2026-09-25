@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -17,9 +18,10 @@ import (
 )
 
 const (
-	ruleTaintedEgress     = "TAINTED_EGRESS"
-	ruleProcessMemoryRead = "PROCESS_MEMORY_READ"
-	defaultTaintWindow    = 60 * 1e9 // 60 seconds in nanoseconds
+	ruleTaintedEgress       = "TAINTED_EGRESS"
+	ruleProcessMemoryRead   = "PROCESS_MEMORY_READ"
+	ruleInstallScriptEgress = "INSTALL_SCRIPT_EGRESS"
+	defaultTaintWindow      = 60 * 1e9 // 60 seconds in nanoseconds
 )
 
 type ScoreOptions struct {
@@ -193,24 +195,54 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 			}
 
 		case "connect":
-			if proc.Tainted == nil {
-				continue
+			ip := destHost(e.Dest)
+			dHost := ip
+			if h := resolvedHost(lookups[ip], e.TS); h != "" {
+				dHost = h
 			}
 
-			// Taint expiration check
-			elapsedNano := e.TS - proc.Tainted.ts
-			if elapsedNano < 0 {
-				elapsedNano = 0
+			var elapsedNano int64
+			if proc.Tainted != nil {
+				elapsedNano = max(e.TS-proc.Tainted.ts, 0)
 			}
-			if elapsedNano > taintWindow {
+			if proc.Tainted == nil || elapsedNano > taintWindow {
+				// No secret read first. Still suspicious if a dependency's install
+				// script calls anything but the registry: secrets in env vars
+				// leave without ever opening a file.
+				if !isInstallScript(proc) || isLoopback(ip) || allowedInstallHost(dHost) {
+					continue
+				}
+				dedupKey := fmt.Sprintf("%s|%s|%s", ruleInstallScriptEgress, dHost, proc.Attribution.Package.Name)
+				if _, seen := dedupKeys[dedupKey]; seen {
+					continue
+				}
+				dedupKeys[dedupKey] = struct{}{}
+				chain := proc.ProcessChain
+				if len(chain) == 0 {
+					chain = []string{proc.Comm}
+				}
+				findings = append(findings, runschema.Finding{
+					Rule:     ruleInstallScriptEgress,
+					Severity: "high",
+					Aggregatable: runschema.FindingAgg{
+						Package:  proc.Attribution.Package,
+						DestHost: dHost,
+					},
+					Context: runschema.FindingContext{
+						PID:          e.PID,
+						Comm:         e.Comm,
+						Dest:         e.Dest,
+						ProcessChain: chain,
+						Cmdline:      proc.Cmdline,
+						Cwd:          proc.Cwd,
+						Fingerprint:  computeFingerprint(ruleInstallScriptEgress, "", dHost, proc.Attribution.Package.Name),
+						Attribution:  proc.Attribution,
+					},
+				})
 				continue
 			}
 			elapsedMS := elapsedNano / 1e6
 
-			dHost := destHost(e.Dest)
-			if h := resolvedHost(lookups[dHost], e.TS); h != "" {
-				dHost = h
-			}
 			dedupKey := fmt.Sprintf("%s|%s|%s|%s", proc.Tainted.path, dHost, proc.Attribution.Package.Name, proc.Comm)
 			if _, seen := dedupKeys[dedupKey]; seen {
 				continue
@@ -360,6 +392,37 @@ func readsOtherProcess(path string, pid uint32) bool {
 	}
 	target := parts[2]
 	return target != "self" && target != "thread-self" && target != fmt.Sprint(pid)
+}
+
+// isInstallScript reports a dependency's install-time code. npm runs every
+// lifecycle script with its cwd set to the package's own node_modules folder.
+func isInstallScript(p *procNode) bool {
+	if p.Attribution.IsUnknown() {
+		return false
+	}
+	switch p.Attribution.Lifecycle {
+	case "preinstall", "install", "postinstall":
+		return true
+	}
+	return strings.Contains(filepath.ToSlash(p.Cwd), "node_modules/")
+}
+
+// installHosts are where install scripts legitimately fetch packages, prebuilt
+// binaries and node-gyp headers. ponytail: fixed list; add an Action input for
+// extra hosts when a real package trips it.
+var installHosts = []string{
+	"registry.npmjs.org", "registry.yarnpkg.com", "npm.pkg.github.com",
+	"github.com", "codeload.github.com", "objects.githubusercontent.com",
+	"release-assets.githubusercontent.com", "nodejs.org",
+}
+
+func allowedInstallHost(host string) bool {
+	return slices.Contains(installHosts, strings.ToLower(host))
+}
+
+func isLoopback(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
 }
 
 // resolvedHost is the name from the latest lookup of this IP before the connect.

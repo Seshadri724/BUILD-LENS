@@ -1,0 +1,10 @@
+{"kind":"exec","ts":8200000000,"pid":920,"ppid":1,"comm":"node","cwd":"/repo/node_modules/esbuild","cmdline":"node install.js"}
+{"kind":"dns","ts":8200500000,"pid":0,"ppid":0,"comm":"","host":"registry.npmjs.org","dest":"104.16.3.35"}
+{"kind":"connect","ts":8201000000,"pid":920,"ppid":1,"comm":"node","dest":"104.16.3.35:443"}
+{"kind":"exec","ts":8210000000,"pid":930,"ppid":1,"comm":"node","cwd":"/repo/node_modules/sharp","cmdline":"node install/libvips.js"}
+{"kind":"dns","ts":8210500000,"pid":0,"ppid":0,"comm":"","host":"objects.githubusercontent.com","dest":"185.199.108.133"}
+{"kind":"connect","ts":8211000000,"pid":930,"ppid":1,"comm":"node","dest":"185.199.108.133:443"}
+{"kind":"connect","ts":8212000000,"pid":930,"ppid":1,"comm":"node","dest":"127.0.0.1:9229"}
+{"kind":"exec","ts":8220000000,"pid":940,"ppid":1,"comm":"node","cwd":"/repo","cmdline":"node node_modules/next/dist/bin/next build"}
+{"kind":"dns","ts":8220500000,"pid":0,"ppid":0,"comm":"","host":"telemetry.nextjs.org","dest":"76.76.21.21"}
+{"kind":"connect","ts":8221000000,"pid":940,"ppid":1,"comm":"node","dest":"76.76.21.21:443"}

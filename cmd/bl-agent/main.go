@@ -133,7 +133,6 @@ func score(args []string) error {
 	return nil
 }
 
-
 func printSummary(m runschema.Manifest) {
 	if m.Status == "degraded" {
 		fmt.Printf("BuildLens — degraded (reason: %s)\n", m.AgentHealth.DegradedReason)
@@ -165,7 +164,11 @@ func printSummary(m runschema.Manifest) {
 		// On Actions, the annotation line replaces the plain one: it still prints in
 		// the log, and also shows on the run page and PR checks.
 		if os.Getenv("GITHUB_ACTIONS") == "true" {
-			fmt.Printf("::error title=BuildLens %s::%s\n", f.Rule,
+			annotation := "warning"
+			if f.Severity == "critical" {
+				annotation = "error"
+			}
+			fmt.Printf("::%s title=BuildLens %s::%s\n", annotation, f.Rule,
 				strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A").Replace(line))
 		} else {
 			fmt.Println("  • " + line)
@@ -182,4 +185,3 @@ func uniqueDests(m runschema.Manifest) int {
 	}
 	return len(seen)
 }
-

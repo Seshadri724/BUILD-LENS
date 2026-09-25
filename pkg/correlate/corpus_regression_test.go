@@ -131,6 +131,27 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			minFindings:  1,
 		},
 		{
+			name:        "clean-install-binary-download",
+			isMalicious: false,
+		},
+		{
+			// Secrets in env vars leave without a file read: no taint, still flagged.
+			name:         "install-script-env-exfil",
+			isMalicious:  true,
+			expectedHost: "collector.env-dump.example",
+			expectedPkg:  "env-dumper",
+			expectedRule: "INSTALL_SCRIPT_EGRESS",
+			minFindings:  1,
+		},
+		{
+			name:         "install-script-raw-ip",
+			isMalicious:  true,
+			expectedHost: "203.0.113.77",
+			expectedPkg:  "quiet-beacon",
+			expectedRule: "INSTALL_SCRIPT_EGRESS",
+			minFindings:  1,
+		},
+		{
 			name:         "runner-memory-scrape",
 			isMalicious:  true,
 			expectedTier: "process_memory",

@@ -1,0 +1,3 @@
+{"kind":"exec","ts":8000000000,"pid":900,"ppid":899,"comm":"node","cwd":"/home/runner/work/app/app/node_modules/env-dumper","cmdline":"node index.js"}
+{"kind":"dns","ts":8001000000,"pid":0,"ppid":0,"comm":"","host":"collector.env-dump.example","dest":"198.51.100.61"}
+{"kind":"connect","ts":8002000000,"pid":900,"ppid":899,"comm":"node","dest":"198.51.100.61:443"}
