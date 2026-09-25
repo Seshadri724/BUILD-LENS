@@ -12,7 +12,7 @@ on:
   # workflow_dispatch alone only shows up once this file is on the default
   # branch; the push trigger lets it run from v2 before that.
   push:
-    branches: [v2]
+    branches: [v2, v3]
     paths:
       - ".github/workflows/cp03-compare.yml"
       - "spike/fixtures/cp03-*/**"

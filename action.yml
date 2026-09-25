@@ -26,6 +26,14 @@ inputs:
     description: 'Path to package lockfile used for attribution'
     required: false
     default: 'package-lock.json'
+  upload-sarif:
+    description: 'Upload the SARIF to GitHub code scanning at the end of the job (needs `security-events: write`)'
+    required: false
+    default: 'false'
+  token:
+    description: 'Token used for the SARIF upload'
+    required: false
+    default: '${{ github.token }}'
 
 outputs:
   manifest:

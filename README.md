@@ -30,9 +30,9 @@ graph LR
     F -.->|"enforce mode"| B["cgroup/connect<br/>blocks the egress"]
 ```
 
-Kernel probes capture process execs, successful opens of sensitive files, outbound TCP connects (IPv4 and IPv6), and bytes sent per process and destination. A userspace correlator builds a taint graph — *this process opened a credential, this same process then sent 1.2 KB to that IP* — and scores the result.
+Kernel probes capture process execs, successful opens of sensitive files (including `.git/config` and other processes' `/proc/<pid>/mem` and `/environ`), outbound TCP connects (IPv4 and IPv6), and bytes sent per process and destination. A DNS listener in the agent maps destination IPs back to the hostnames that were looked up. A userspace correlator builds a taint graph — *this process opened a credential, this same process then sent 1.2 KB to that IP* — and scores the result.
 
-**What the probes do *not* do yet:** destinations are raw IPs (no DNS or TLS SNI hostname mapping); a successful `open` is evidence of access, not proof the bytes were read; only `openat` is hooked (not `open`/`openat2`), and UDP egress is not observed. "Bytes sent" is what the kernel accepted from that process for that destination over the whole run, not proof those bytes were the file contents. Findings land on the PR as a check run and in GitHub code scanning as SARIF, within sixty seconds of the run ending.
+**What the probes do *not* do yet:** hostnames come from plain UDP DNS only, so lookups over DNS-over-HTTPS/TLS/TCP and hardcoded IPs stay as IPs, and a CDN IP shared by many names gets the most recently looked-up one; there is no TLS SNI yet. A successful `open` is evidence of access, not proof the bytes were read; only `openat` is hooked (not `open`/`openat2`), and UDP egress is not observed. "Bytes sent" is what the kernel accepted from that process for that destination over the whole run, not proof those bytes were the file contents. Findings are annotations on the run and the job summary; add the SARIF upload step below to also see them in GitHub code scanning and on PRs.
 
 **We never read file contents or network payloads.** Only paths, sizes, hashes, destinations, and byte counts leave the runner. That constraint is permanent — it is what makes the tool deployable without a MITM CA in every language runtime's trust store.
 
@@ -50,7 +50,26 @@ jobs:
       - run: npm ci && npm test
 ```
 
-That is the entire integration. No changes to `package.json`, no changes to build commands, no proxy configuration. The agent starts in the first step; its post step scores the run at the end of the job, even if the job failed. Findings appear as error annotations on the run page and in the job's step summary; the manifest (`buildlens-manifest.json`) and SARIF (`buildlens.sarif`) are written to the workspace.
+**Optional: show findings in code scanning and on PRs.** The SARIF only exists once BuildLens's post step has scored the run, after all your other steps, so a separate `upload-sarif` step would find nothing. Let BuildLens upload it instead:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: Seshadri724/BUILD-LENS@v0.1.0
+        with:
+          upload-sarif: true
+      - uses: actions/checkout@v4
+      - run: npm ci && npm test
+```
+
+Off by default: nothing leaves the runner unless you turn it on. Code scanning is free on public repos; private repos need GitHub Advanced Security. If the upload fails, BuildLens logs a warning and the build is unaffected.
+
+That is the entire integration. No changes to `package.json`, no changes to build commands, no proxy configuration. The agent starts in the first step; its post step scores the run at the end of the job, even if the job failed. Findings appear as annotations on the run page (errors for critical, warnings for high) and in the job's step summary; the manifest (`buildlens-manifest.json`) and SARIF (`buildlens.sarif`) are written to the workspace.
 
 If the agent cannot load — unsupported runner, missing BTF, no passwordless sudo — it logs a warning and exits 0. **A security tool that breaks builds gets uninstalled by Friday.**
 
@@ -65,7 +84,7 @@ Pin a release tag (`@v0.1.0`) or the moving `@v0` tag, not a branch. Each releas
 | Passwordless `sudo -n` | loading eBPF needs root | warning, exit 0 |
 | `package-lock.json` in the workspace root (or set `lockfile:`) | names the npm package | findings say `unknown` package |
 
-Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, DNS/TLS hostnames (destinations are IPs), blocking, and secrets held only in environment variables (see *Honest limitations*).
+Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, TLS SNI hostnames, and blocking (see *Honest limitations*).
 
 ### Inputs
 
@@ -75,6 +94,8 @@ Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, DNS/TLS h
 | `manifest` | `buildlens-manifest.json` | where to write the run manifest |
 | `sarif` | `buildlens.sarif` | where to write SARIF |
 | `debug` | `false` | also keep every raw event |
+| `upload-sarif` | `false` | upload the SARIF to GitHub code scanning (needs `security-events: write`) |
+| `token` | `github.token` | token for the SARIF upload |
 
 To score a recorded event file locally without a kernel, see [quickstart.md](quickstart.md).
 
@@ -102,7 +123,7 @@ Read them in that order. PRD defines what and why, STRATEGY defines why it compo
 
 **Phase 0 mechanism: pass (CP-0.1, CP-0.2).** eBPF loads on GitHub-hosted `ubuntu-22.04` / `24.04`. Overhead of the *exec-only* attach-once probe was ~0% on a tiny `npm ci` — re-measure once the full probe set exists. **CP-0.3 (vs Harden-Runner) is still a human judgment call.**
 
-**Phase 1 — working agent, narrow probe set.** `bl-agent record` runs as the Action's `main`/`post` and captures exec, successful sensitive-file opens, IPv4/IPv6 TCP connects, and per-destination bytes sent. `bl-agent score` produces a versioned manifest + SARIF (`TAINTED_EGRESS`, fail-open, replay-stable) with ancestor-process taint and npm package attribution from the lockfile. CI verifies this end to end against a synthetic exfiltrating `postinstall`, including `bytes_sent > 0`. Not built: DNS/SNI hostnames, pip attribution, enforcement.
+**Phase 1 — working agent, narrow probe set.** `bl-agent record` runs as the Action's `main`/`post` and captures exec, successful sensitive-file opens, IPv4/IPv6 TCP connects, and per-destination bytes sent. `bl-agent score` produces a versioned manifest + SARIF (`TAINTED_EGRESS`, `PROCESS_MEMORY_READ`, `INSTALL_SCRIPT_EGRESS`; fail-open, replay-stable) with ancestor-process taint and npm package attribution from the lockfile. CI verifies this end to end against a synthetic exfiltrating `postinstall`, including `bytes_sent > 0`, a `.git/config` token read, another process's `/proc/<pid>/environ`, and a hostname resolved through live DNS. Not built: TLS SNI, pip attribution, enforcement.
 
 ---
 
@@ -125,6 +146,7 @@ A security product that overstates coverage is a liability. Known gaps, document
 - **Exfiltration through an allowlisted destination** (e.g. small volumes via the GitHub API) will evade destination-based detection. Mitigated partially by byte-volume anomaly detection; not solved.
 - **Linux only.** eBPF has no Windows or macOS equivalent we can ship at this cost. Windows and macOS runners are unmonitored.
 - **Kernel 5.8+ with BTF required.** Older kernels fail open — visibly, with a clear message, but they are unmonitored.
+- **Secrets in environment variables.** Reading `process.env` opens no file, so it can't be tainted. What BuildLens does flag is a dependency's install script calling any host other than the package registry and GitHub (`INSTALL_SCRIPT_EGRESS`). Packages that download binaries from other hosts (e.g. Puppeteer, Cypress) will trip it; the host list isn't configurable yet.
 - **Attribution confidence varies.** When we cannot determine which package spawned a process, we say `unknown` rather than guessing. Naming the wrong package as malicious is worse than naming none.
 
 ---

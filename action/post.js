@@ -151,7 +151,43 @@ function post() {
     console.log(`::warning::Scoring encountered an error: ${err.message}`);
   }
 
+  if (process.env['INPUT_UPLOAD-SARIF'] === 'true' && fs.existsSync(sarifOut)) {
+    uploadSarif(sarifOut).catch((e) => console.log(`::warning::BuildLens SARIF upload failed: ${e.message}`));
+  }
+
   console.log('BuildLens post-processing completed.');
+}
+
+// The SARIF only exists once this post step has scored the run, after every
+// other step in the job, so a separate upload step can never see it. Upload it
+// here instead. Opt-in: nothing leaves the runner unless the user asks.
+async function uploadSarif(sarifPath) {
+  const token = process.env.INPUT_TOKEN;
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (!token || !repo) {
+    console.log('::warning::BuildLens SARIF upload skipped: no token or repository in the environment');
+    return;
+  }
+  const api = process.env.GITHUB_API_URL || 'https://api.github.com';
+  const res = await fetch(`${api}/repos/${repo}/code-scanning/sarifs`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    body: JSON.stringify({
+      commit_sha: process.env.GITHUB_SHA,
+      ref: process.env.GITHUB_REF,
+      sarif: require('zlib').gzipSync(fs.readFileSync(sarifPath)).toString('base64'),
+      tool_name: 'BuildLens',
+    }),
+  });
+  if (!res.ok) {
+    // 403: the job lacks `security-events: write`, or code scanning is off for this private repo.
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  console.log('BuildLens SARIF uploaded to code scanning.');
 }
 
 try {
