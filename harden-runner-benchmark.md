@@ -2,7 +2,7 @@
 
 ## Setup
 
-- Workflow: [`.github/workflows/cp03-compare.yml`](.github/workflows/cp03-compare.yml), runs on push to `v2` when the fixture or workflow changes, or manually. Repo must be public for Harden-Runner's free tier.
+- Workflow: [`.github/workflows/cp03-compare.yml`](.github/workflows/cp03-compare.yml), runs on push to `v2` or `v3` when the fixture or workflow changes, or manually. Repo must be public for Harden-Runner's free tier.
 - Build: `npm ci` of [`spike/fixtures/cp03-app`](spike/fixtures/cp03-app): 60+ real npm dependencies plus one compromised dependency, `telemetry-helper@2.4.1`, whose `postinstall` reads the project `.env` (dummy values) and POSTs it to `httpbin.org`.
 - Same runner image (`ubuntu-22.04`), same lockfile, three jobs: baseline / BuildLens / Harden-Runner.
 
@@ -60,7 +60,7 @@ BuildLens — findings, 1 findings, 1 unique dest hosts (ruleset 1.0.0)
 | Question an AppSec engineer asks | Harden-Runner | BuildLens |
 |---|---|---|
 | Did something leave the runner, and to where? | Yes: every destination, including httpbin.org | Only the destination linked to a secret: 107.21.166.194 |
-| Hostname or only IP? | **Hostname** | IP only |
+| Hostname or only IP? | **Hostname** | IP only in runs #1–2; **hostname** from run #3 (plain UDP DNS only) |
 | Which dependency did it? | No: `node`, pid 2567 | **`telemetry-helper`** |
 | Did it touch a secret first? Which file? | No | **Yes: `cp03-app/.env`** |
 | How much data went out? | No | 760 bytes (run #2) |
@@ -74,14 +74,14 @@ BuildLens — findings, 1 findings, 1 unique dest hosts (ruleset 1.0.0)
 
 ## Known BuildLens gaps visible in this comparison
 
-- Destinations are IPs. Harden-Runner shows hostnames; BuildLens does not resolve DNS or read TLS SNI yet.
+- Hostnames come from plain UDP DNS only (from run #3; runs #1–2 showed IPs). DNS over HTTPS/TLS/TCP and hardcoded IPs still show as IPs, and there is no TLS SNI.
 - "Sensitive file" means a successful `openat`, not proof the bytes were read. "Bytes sent" is the process's total to that destination, not proof it was the file's contents.
 - Observe only. Harden-Runner can block egress; BuildLens cannot.
 
 ## Key Takeaways
 
 1. **What did Harden-Runner's output tell you?** That `node` (pid 2567) called httpbin.org:443 during `npm ci`, next to the expected GitHub and npm registry traffic. On this first run it was a log entry, not an alert.
-2. **What did BuildLens's output tell you that Harden-Runner's didn't?** That the call came from `telemetry-helper`'s install script, that the same process had just opened the project's `.env`, and that this is a critical finding, with no baseline and no other alerts. What it didn't tell you: the hostname.
+2. **What did BuildLens's output tell you that Harden-Runner's didn't?** That the call came from `telemetry-helper`'s install script, that the same process had just opened the project's `.env`, and that this is a critical finding, with no baseline and no other alerts. What it didn't tell you in runs #1–2: the hostname (shown from [run #3](https://github.com/Seshadri724/BUILD-LENS/actions/runs/36128458561): `dest: httpbin.org`).
 
 **Open questions and future tests:**
 - Harden-Runner didn't flag httpbin.org on run #2 either; its baseline may need more runs, or an allowlist in block mode. How does destination allowlisting compare when developers want zero configuration vs explicit policies?
