@@ -1,0 +1,4 @@
+{"kind":"exec","ts":7000000000,"pid":800,"ppid":1,"comm":"node","cwd":"/repo/node_modules/raw-ip-stealer","cmdline":"node postinstall.js"}
+{"kind":"open","ts":7001000000,"pid":800,"ppid":1,"comm":"node","path":"/home/runner/work/repo/.env"}
+{"kind":"connect","ts":7002000000,"pid":800,"ppid":1,"comm":"node","dest":"127.0.0.1:8088"}
+{"kind":"dns","ts":7050000000,"pid":0,"ppid":0,"comm":"","host":"127.0.0.1.nip.io","dest":"127.0.0.1"}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"time"
+	"unsafe"
 
 	"github.com/buildlens/buildlens/pkg/runschema"
 	"golang.org/x/net/bpf"
@@ -44,18 +45,22 @@ func sniffDNS(emit func(runschema.Event), stop <-chan struct{}, debug bool) int 
 		log.Printf("BuildLens agent: DNS capture bind failed (%v); destinations stay as IPs", err)
 		return 0
 	}
+	// Kernel arrival time per packet: a DNS answer always lands before the
+	// connect it leads to, so the correlator can match lookups strictly by time.
+	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_TIMESTAMPNS, 1)
 	// Wake up periodically to notice stop.
 	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Usec: 200_000})
 
 	count := 0
 	buf := make([]byte, 65536)
+	oob := make([]byte, unix.CmsgSpace(16))
 	for {
 		select {
 		case <-stop:
 			return count
 		default:
 		}
-		n, from, err := unix.Recvfrom(fd, buf, 0)
+		n, oobn, _, from, err := unix.Recvmsg(fd, buf, oob, 0)
 		if err != nil {
 			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
 				continue
@@ -67,7 +72,7 @@ func sniffDNS(emit func(runschema.Event), stop <-chan struct{}, debug bool) int 
 		if ll, ok := from.(*unix.SockaddrLinklayer); ok && ll.Pkttype == unix.PACKET_OUTGOING {
 			continue
 		}
-		ts := time.Now().UnixNano()
+		ts := packetTime(oob[:oobn])
 		host, ips := parseDNSResponse(buf[:n])
 		for _, ip := range ips {
 			if debug {
@@ -77,4 +82,18 @@ func sniffDNS(emit func(runschema.Event), stop <-chan struct{}, debug bool) int 
 			count++
 		}
 	}
+}
+
+// packetTime reads the SO_TIMESTAMPNS arrival time, falling back to now.
+func packetTime(oob []byte) int64 {
+	msgs, err := unix.ParseSocketControlMessage(oob)
+	if err == nil {
+		for _, m := range msgs {
+			if m.Header.Level == unix.SOL_SOCKET && m.Header.Type == unix.SCM_TIMESTAMPNS && len(m.Data) >= 16 {
+				ts := (*unix.Timespec)(unsafe.Pointer(&m.Data[0]))
+				return ts.Nano()
+			}
+		}
+	}
+	return time.Now().UnixNano()
 }

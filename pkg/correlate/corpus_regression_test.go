@@ -121,6 +121,16 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			minFindings:  1,
 		},
 		{
+			// Direct-IP connect; a later lookup that happens to return the same IP
+			// must not relabel it (seen live in agent-ci with nip.io).
+			name:         "dns-later-lookup-no-relabel",
+			isMalicious:  true,
+			expectedHost: "127.0.0.1",
+			expectedTier: "env",
+			expectedPkg:  "raw-ip-stealer",
+			minFindings:  1,
+		},
+		{
 			name:         "runner-memory-scrape",
 			isMalicious:  true,
 			expectedTier: "process_memory",

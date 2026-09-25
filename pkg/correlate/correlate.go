@@ -20,9 +20,6 @@ const (
 	ruleTaintedEgress     = "TAINTED_EGRESS"
 	ruleProcessMemoryRead = "PROCESS_MEMORY_READ"
 	defaultTaintWindow    = 60 * 1e9 // 60 seconds in nanoseconds
-	// A DNS answer is read in userspace a moment after the kernel sees the
-	// connect it led to, so allow lookups stamped slightly after the connect.
-	dnsSlackNano = 1e9
 )
 
 type ScoreOptions struct {
@@ -366,12 +363,14 @@ func readsOtherProcess(path string, pid uint32) bool {
 }
 
 // resolvedHost is the name from the latest lookup of this IP before the connect.
+// Lookups are stamped with kernel arrival time, so a later lookup of the same IP
+// (another process resolving a name) never relabels an earlier connect.
 // ponytail: a CDN IP shared by many names gets the most recent one; per-process
 // attribution of lookups needs the resolver's socket, not a sniffer.
 func resolvedHost(lookups []runschema.Event, ts int64) string {
 	host := ""
 	for _, l := range lookups {
-		if l.TS > ts+dnsSlackNano {
+		if l.TS > ts {
 			break
 		}
 		host = l.Host
