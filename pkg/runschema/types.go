@@ -5,7 +5,7 @@ package runschema
 
 const (
 	SchemaVersion  = "1"
-	RulesetVersion = "1.0.0"
+	RulesetVersion = "1.1.0"
 )
 
 // PackageID is the only key used for cross-run aggregation.

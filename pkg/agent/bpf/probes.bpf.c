@@ -108,6 +108,21 @@ static __always_inline void fill_common(struct event *e, __u8 kind)
 // shared libraries, stats) before reserving ring buffer space or waking userspace.
 static __always_inline int is_sensitive_path(const char *p, int len)
 {
+	// /proc/<pid>[/task/<tid>]/mem or /environ: runner memory scraping (tj-actions).
+	// op.path is zero-filled, so a 0 after the suffix means end of string.
+	if (p[0] == '/' && p[1] == 'p' && p[2] == 'r' && p[3] == 'o' && p[4] == 'c' && p[5] == '/') {
+		#pragma unroll
+		for (int i = 6; i < 48; i++) {
+			if (p[i] != '/')
+				continue;
+			if (p[i+1] == 'm' && p[i+2] == 'e' && p[i+3] == 'm' && p[i+4] == 0)
+				return 1;
+			if (p[i+1] == 'e' && p[i+2] == 'n' && p[i+3] == 'v' && p[i+4] == 'i' && p[i+5] == 'r' && p[i+6] == 'o' && p[i+7] == 'n' && p[i+8] == 0)
+				return 1;
+		}
+		return 0;
+	}
+
 	#pragma unroll
 	for (int i = 0; i < 96; i++) {
 		if (i >= len)
@@ -133,6 +148,11 @@ static __always_inline int is_sensitive_path(const char *p, int len)
 				return 1;
 			// .git-credentials
 			if (p[i+1] == 'g' && p[i+2] == 'i' && p[i+3] == 't' && p[i+4] == '-' && p[i+5] == 'c' && p[i+6] == 'r' && p[i+7] == 'e' && p[i+8] == 'd')
+				return 1;
+			// .git/config (actions/checkout persists GITHUB_TOKEN here) and .gitconfig
+			if (p[i+1] == 'g' && p[i+2] == 'i' && p[i+3] == 't' &&
+			    ((p[i+4] == '/' && p[i+5] == 'c' && p[i+6] == 'o' && p[i+7] == 'n' && p[i+8] == 'f') ||
+			     (p[i+4] == 'c' && p[i+5] == 'o' && p[i+6] == 'n' && p[i+7] == 'f')))
 				return 1;
 		}
 		// /etc/shadow

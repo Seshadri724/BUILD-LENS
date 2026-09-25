@@ -1,0 +1,6 @@
+{"type":"exec","ts":3000000000,"pid":400,"ppid":1,"comm":"git","cwd":"/home/runner/work/repo/repo","cmdline":"git fetch origin"}
+{"type":"open","ts":3001000000,"pid":400,"ppid":1,"comm":"git","path":"/home/runner/work/repo/repo/.git/config"}
+{"type":"open","ts":3001500000,"pid":400,"ppid":1,"comm":"git","path":"/home/runner/.gitconfig"}
+{"type":"exec","ts":3002000000,"pid":401,"ppid":400,"comm":"git-remote-http","cwd":"/home/runner/work/repo/repo","cmdline":"git-remote-https origin https://github.com/org/repo"}
+{"type":"open","ts":3003000000,"pid":401,"ppid":400,"comm":"git-remote-http","path":"/home/runner/work/repo/repo/.git/config"}
+{"type":"connect","ts":3010000000,"pid":401,"ppid":400,"comm":"git-remote-http","dest":"140.82.112.3:443"}

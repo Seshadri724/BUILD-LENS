@@ -1,0 +1,4 @@
+{"type":"exec","ts":5000000000,"pid":600,"ppid":1,"comm":"node","cwd":"/repo","cmdline":"node build.js"}
+{"type":"open","ts":5001000000,"pid":600,"ppid":1,"comm":"node","path":"/proc/self/environ"}
+{"type":"open","ts":5001500000,"pid":600,"ppid":1,"comm":"node","path":"/proc/600/task/601/mem"}
+{"type":"connect","ts":5002000000,"pid":600,"ppid":1,"comm":"node","dest":"104.16.0.35:443"}

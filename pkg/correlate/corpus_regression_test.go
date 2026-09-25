@@ -11,35 +11,36 @@ import (
 )
 
 type corpusTestCase struct {
-	name          string
-	isMalicious   bool
-	expectedHost  string
-	expectedTier  string
-	expectedPkg   string
-	minFindings   int
+	name         string
+	isMalicious  bool
+	expectedHost string
+	expectedTier string
+	expectedPkg  string
+	expectedRule string
+	minFindings  int
 }
 
 func TestCorpusRegressionSuite(t *testing.T) {
 	testCases := []corpusTestCase{
 		{
-			name:         "clean-npm-ci",
-			isMalicious:  false,
+			name:        "clean-npm-ci",
+			isMalicious: false,
 		},
 		{
-			name:         "expired-taint-window",
-			isMalicious:  false,
+			name:        "expired-taint-window",
+			isMalicious: false,
 		},
 		{
-			name:         "clean-env-example",
-			isMalicious:  false,
+			name:        "clean-env-example",
+			isMalicious: false,
 		},
 		{
-			name:         "clean-public-telemetry",
-			isMalicious:  false,
+			name:        "clean-public-telemetry",
+			isMalicious: false,
 		},
 		{
-			name:         "false-positive-build-script",
-			isMalicious:  false,
+			name:        "false-positive-build-script",
+			isMalicious: false,
 		},
 		{
 			name:         "parent-env-child-curl",
@@ -93,6 +94,30 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			expectedPkg:  "stealth-tracker",
 			minFindings:  1,
 		},
+		{
+			name:        "clean-git-fetch",
+			isMalicious: false,
+		},
+		{
+			name:        "clean-proc-self-read",
+			isMalicious: false,
+		},
+		{
+			name:         "git-config-token-theft",
+			isMalicious:  true,
+			expectedHost: "198.51.100.40",
+			expectedTier: "git_credential",
+			expectedPkg:  "gh-token-grabber",
+			expectedRule: "TAINTED_EGRESS",
+			minFindings:  1,
+		},
+		{
+			name:         "runner-memory-scrape",
+			isMalicious:  true,
+			expectedTier: "process_memory",
+			expectedRule: "PROCESS_MEMORY_READ",
+			minFindings:  1,
+		},
 	}
 
 	var tp, fp, fn, tn int
@@ -128,6 +153,9 @@ func TestCorpusRegressionSuite(t *testing.T) {
 				}
 				if tc.expectedPkg != "" && f.Aggregatable.Package.Name != tc.expectedPkg {
 					t.Errorf("expected package %s, got %s", tc.expectedPkg, f.Aggregatable.Package.Name)
+				}
+				if tc.expectedRule != "" && f.Rule != tc.expectedRule {
+					t.Errorf("expected rule %s, got %s", tc.expectedRule, f.Rule)
 				}
 				if f.Context.Fingerprint == "" {
 					t.Errorf("expected non-empty deterministic fingerprint")

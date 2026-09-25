@@ -103,7 +103,7 @@ func FromManifest(m runschema.Manifest) logFile {
 			"Confidence: %s\n\n"+
 			"Recommended action:\n"+
 			"Remove the dependency and regenerate package-lock.json.",
-			pkgDisplay, lifecycle, f.Context.Path, chain, f.Aggregatable.DestHost, bytesSent(f), f.Aggregatable.ElapsedMS, confidence)
+			pkgDisplay, lifecycle, f.Context.Path, chain, destDisplay(f), bytesSent(f), f.Aggregatable.ElapsedMS, confidence)
 
 		fp := f.Context.Fingerprint
 		if fp == "" {
@@ -142,6 +142,9 @@ func FromManifest(m runschema.Manifest) logFile {
 					ID:               "TAINTED_EGRESS",
 					ShortDescription: text{Text: "Sensitive file read followed by unexpected network egress"},
 					HelpURI:          "https://github.com/buildlens/buildlens/blob/main/docs/rules/TAINTED_EGRESS.md",
+				}, {
+					ID:               "PROCESS_MEMORY_READ",
+					ShortDescription: text{Text: "Process read another process's memory or environment"},
 				}},
 			}},
 			Results: results,
@@ -202,7 +205,7 @@ func GenerateStepSummary(m runschema.Manifest) string {
 		}
 		sb.WriteString(fmt.Sprintf("- **Sensitive File:** `%s` (%s)\n", f.Context.Path, f.Aggregatable.FileTier))
 		sb.WriteString(fmt.Sprintf("- **Process Chain:** `%s`\n", chain))
-		sb.WriteString(fmt.Sprintf("- **Destination:** `%s`\n", f.Aggregatable.DestHost))
+		sb.WriteString(fmt.Sprintf("- **Destination:** `%s`\n", destDisplay(f)))
 		sb.WriteString(fmt.Sprintf("- **Bytes Sent:** `%s`\n", bytesSent(f)))
 		sb.WriteString(fmt.Sprintf("- **Elapsed Time:** `%d ms`\n", f.Aggregatable.ElapsedMS))
 		sb.WriteString(fmt.Sprintf("- **Confidence:** `%s (%s)`\n\n", confidence, confidencePct))
@@ -212,6 +215,13 @@ func GenerateStepSummary(m runschema.Manifest) string {
 	}
 
 	return sb.String()
+}
+
+func destDisplay(f runschema.Finding) string {
+	if f.Aggregatable.DestHost == "" {
+		return "none"
+	}
+	return f.Aggregatable.DestHost
 }
 
 func bytesSent(f runschema.Finding) string {

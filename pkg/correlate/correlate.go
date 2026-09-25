@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	ruleTaintedEgress  = "TAINTED_EGRESS"
-	defaultTaintWindow = 60 * 1e9 // 60 seconds in nanoseconds
+	ruleTaintedEgress     = "TAINTED_EGRESS"
+	ruleProcessMemoryRead = "PROCESS_MEMORY_READ"
+	defaultTaintWindow    = 60 * 1e9 // 60 seconds in nanoseconds
 )
 
 type ScoreOptions struct {
@@ -133,14 +134,49 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 			}
 
 		case "open":
-			if tier := fileTier(e.Path); tier != "" {
-				proc.Tainted = &taintMark{
-					path:       e.Path,
-					tier:       tier,
-					ts:         e.TS,
-					originPID:  e.PID,
-					originComm: e.Comm,
+			tier := fileTier(e.Path)
+			if tier == "" || (tier == "git_credential" && isGit(proc.Comm)) {
+				continue
+			}
+			if tier == "process_memory" {
+				if !readsOtherProcess(e.Path, e.PID) {
+					continue
 				}
+				// Scraping another process's memory or environment is the
+				// finding on its own; secrets can leave via logs, not just egress.
+				dedupKey := fmt.Sprintf("%s|%s|%s|%s", ruleProcessMemoryRead, e.Path, proc.Attribution.Package.Name, proc.Comm)
+				if _, seen := dedupKeys[dedupKey]; !seen {
+					dedupKeys[dedupKey] = struct{}{}
+					chain := proc.ProcessChain
+					if len(chain) == 0 {
+						chain = []string{proc.Comm}
+					}
+					findings = append(findings, runschema.Finding{
+						Rule:     ruleProcessMemoryRead,
+						Severity: "critical",
+						Aggregatable: runschema.FindingAgg{
+							Package:  proc.Attribution.Package,
+							FileTier: tier,
+						},
+						Context: runschema.FindingContext{
+							PID:          e.PID,
+							Comm:         proc.Comm,
+							Path:         e.Path,
+							ProcessChain: chain,
+							Cmdline:      proc.Cmdline,
+							Cwd:          proc.Cwd,
+							Fingerprint:  computeFingerprint(ruleProcessMemoryRead, tier, "", proc.Attribution.Package.Name),
+							Attribution:  proc.Attribution,
+						},
+					})
+				}
+			}
+			proc.Tainted = &taintMark{
+				path:       e.Path,
+				tier:       tier,
+				ts:         e.TS,
+				originPID:  e.PID,
+				originComm: e.Comm,
 			}
 
 		case "connect":
@@ -267,6 +303,10 @@ func fileTier(path string) string {
 	}
 
 	switch {
+	// Another process's memory or environment: how the tj-actions payload
+	// pulled every secret out of Runner.Worker.
+	case strings.HasPrefix(lower, "/proc/") && (strings.HasSuffix(lower, "/mem") || strings.HasSuffix(lower, "/environ")):
+		return "process_memory"
 	case strings.Contains(lower, ".env"):
 		return "env"
 	case strings.Contains(lower, ".npmrc") || strings.Contains(lower, ".yarnrc") || strings.Contains(lower, "pip.conf"):
@@ -275,13 +315,32 @@ func fileTier(path string) string {
 		return "cloud_credential"
 	case strings.Contains(lower, ".ssh/id_") || strings.Contains(lower, ".ssh/authorized_keys"):
 		return "ssh_key"
-	case strings.Contains(lower, ".netrc") || strings.Contains(lower, ".git-credentials") || strings.Contains(lower, ".gitconfig"):
+	case strings.Contains(lower, ".netrc") || strings.Contains(lower, ".git-credentials") || strings.Contains(lower, ".gitconfig") ||
+		strings.Contains(lower, ".git/config"): // actions/checkout persists GITHUB_TOKEN here
 		return "git_credential"
 	case strings.Contains(lower, "/etc/shadow") || strings.Contains(lower, "/etc/security"):
 		return "system_auth"
 	default:
 		return ""
 	}
+}
+
+// isGit reports git itself, which reads its own config and credentials before
+// every fetch. ponytail: matches comm only, so a payload named "git" evades it;
+// check the exe path if that shows up.
+func isGit(comm string) bool {
+	return comm == "git" || strings.HasPrefix(comm, "git-")
+}
+
+// readsOtherProcess reports whether a /proc/<pid>/... path names a process other
+// than the reader. Reading your own environ is no worse than having the env.
+func readsOtherProcess(path string, pid uint32) bool {
+	parts := strings.Split(path, "/") // "", "proc", "<pid>", ...
+	if len(parts) < 3 {
+		return false
+	}
+	target := parts[2]
+	return target != "self" && target != "thread-self" && target != fmt.Sprint(pid)
 }
 
 func destHost(dest string) string {

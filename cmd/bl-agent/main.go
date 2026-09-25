@@ -156,8 +156,12 @@ func printSummary(m runschema.Manifest) {
 		if f.Aggregatable.BytesSent != nil {
 			bytesSent = fmt.Sprint(*f.Aggregatable.BytesSent)
 		}
+		dest := f.Aggregatable.DestHost
+		if dest == "" {
+			dest = "none"
+		}
 		line := fmt.Sprintf("[%s] %s | pkg: %s | file: %s | dest: %s | bytes sent: %s | chain: %s",
-			f.Severity, f.Rule, pkgName, f.Context.Path, f.Aggregatable.DestHost, bytesSent, chain)
+			f.Severity, f.Rule, pkgName, f.Context.Path, dest, bytesSent, chain)
 		// On Actions, the annotation line replaces the plain one: it still prints in
 		// the log, and also shows on the run page and PR checks.
 		if os.Getenv("GITHUB_ACTIONS") == "true" {
@@ -172,7 +176,9 @@ func printSummary(m runschema.Manifest) {
 func uniqueDests(m runschema.Manifest) int {
 	seen := map[string]struct{}{}
 	for _, f := range m.Findings {
-		seen[f.Aggregatable.DestHost] = struct{}{}
+		if f.Aggregatable.DestHost != "" {
+			seen[f.Aggregatable.DestHost] = struct{}{}
+		}
 	}
 	return len(seen)
 }

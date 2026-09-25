@@ -85,7 +85,7 @@ function post() {
     console.log(`BuildLens operated in fail-open mode: ${failReason}`);
     const degradedManifest = {
       schema_version: '1',
-      ruleset_version: '1.0.0',
+      ruleset_version: '1.1.0',
       status: 'degraded',
       agent_health: {
         degraded: true,
@@ -111,7 +111,7 @@ function post() {
     console.log('::warning::BuildLens agent stats file missing; marking run degraded');
     const degradedManifest = {
       schema_version: '1',
-      ruleset_version: '1.0.0',
+      ruleset_version: '1.1.0',
       status: 'degraded',
       agent_health: {
         degraded: true,
