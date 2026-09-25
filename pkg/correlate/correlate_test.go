@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/buildlens/buildlens/pkg/correlate"
@@ -236,5 +237,43 @@ func TestBytesSentAttachedToFinding(t *testing.T) {
 	m = correlate.Score(events[:2])
 	if b := m.Findings[0].Aggregatable.BytesSent; b != nil {
 		t.Fatalf("bytes_sent should be nil without telemetry, got %d", *b)
+	}
+}
+
+func TestAgentActivityReport(t *testing.T) {
+	events, err := correlate.LoadJSONLFile(filepath.Join("..", "..", "testdata", "corpus", "clean-agent-session", "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := correlate.Score(events)
+	if len(m.Agents) != 1 || m.Agents[0].Agent != "claude-code" {
+		t.Fatalf("agents = %+v, want one claude-code entry", m.Agents)
+	}
+	a := m.Agents[0]
+	wantCmds := []string{
+		"bash -c git status",
+		"git status",
+		"bash -c curl -H 'Authorization: Bearer ***' https://example.test",
+		"git push origin fix-failing-test",
+		"git-remote-https origin https://github.com/org/app",
+	}
+	if !slices.Equal(a.Commands, wantCmds) {
+		t.Errorf("commands (in order, token masked, agent prompt left out):\n got %q\nwant %q", a.Commands, wantCmds)
+	}
+	// git's own .git/config read is skipped like any git process; .env is the agent's.
+	if want := []string{"/home/runner/work/app/app/.env"}; !slices.Equal(a.SecretFiles, want) {
+		t.Errorf("secret files = %q, want %q", a.SecretFiles, want)
+	}
+	if want := []string{"api.anthropic.com", "github.com"}; !slices.Equal(a.Hosts, want) {
+		t.Errorf("hosts = %q, want %q", a.Hosts, want)
+	}
+
+	events, err = correlate.LoadJSONLFile(filepath.Join("..", "..", "testdata", "corpus", "agent-prompt-injection-exfil", "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = correlate.Score(events)
+	if len(m.Findings) != 1 || m.Findings[0].Context.Agent != "claude-code" {
+		t.Fatalf("want one finding tagged agent=claude-code, got %+v", m.Findings)
 	}
 }

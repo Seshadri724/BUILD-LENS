@@ -101,9 +101,11 @@ func FromManifest(m runschema.Manifest) logFile {
 			"Bytes sent: %s\n"+
 			"Elapsed time: %d ms\n"+
 			"Confidence: %s\n\n"+
-			"Recommended action:\n"+
-			"Remove the dependency and regenerate package-lock.json.",
-			headline(f), pkgDisplay, lifecycle, fileDisplay(f), chain, destDisplay(f), bytesSent(f), f.Aggregatable.ElapsedMS, confidence)
+			"Recommended action:\n%s",
+			headline(f), pkgDisplay, lifecycle, fileDisplay(f), chain, destDisplay(f), bytesSent(f), f.Aggregatable.ElapsedMS, confidence, advice(f))
+		if f.Context.Agent != "" {
+			msg = strings.Replace(msg, "\nPackage:", "\nAI agent: "+f.Context.Agent+"\nPackage:", 1)
+		}
 
 		fp := f.Context.Fingerprint
 		if fp == "" {
@@ -168,7 +170,8 @@ func GenerateStepSummary(m runschema.Manifest) string {
 
 	if len(m.Findings) == 0 {
 		sb.WriteString("### ✅ BuildLens Runtime: CLEAN\n\n")
-		sb.WriteString("No suspicious credential access or unauthorized exfiltration detected during build.\n")
+		sb.WriteString("No suspicious credential access or unauthorized exfiltration detected during build.\n\n")
+		sb.WriteString(agentSection(m))
 		return sb.String()
 	}
 
@@ -214,12 +217,60 @@ func GenerateStepSummary(m runschema.Manifest) string {
 		sb.WriteString(fmt.Sprintf("- **Bytes Sent:** `%s`\n", bytesSent(f)))
 		sb.WriteString(fmt.Sprintf("- **Elapsed Time:** `%d ms`\n", f.Aggregatable.ElapsedMS))
 		sb.WriteString(fmt.Sprintf("- **Confidence:** `%s (%s)`\n\n", confidence, confidencePct))
+		if f.Context.Agent != "" {
+			sb.WriteString(fmt.Sprintf("- **Via AI agent:** `%s`\n\n", f.Context.Agent))
+		}
 		sb.WriteString("**Recommended Action:**\n")
-		sb.WriteString("```bash\nnpm uninstall " + pkg.Name + " && npm install --package-lock-only\n```\n\n")
+		if pkg.Ecosystem == "agent" {
+			sb.WriteString(agentAdvice + "\n\n")
+		} else {
+			sb.WriteString("```bash\nnpm uninstall " + pkg.Name + " && npm install --package-lock-only\n```\n\n")
+		}
 		sb.WriteString("---\n\n")
 	}
 
+	sb.WriteString(agentSection(m))
 	return sb.String()
+}
+
+const agentAdvice = "Rotate the secret. Then read the issue, PR comment or file the agent was working from for instructions it shouldn't have followed (prompt injection), and limit what the agent's job can reach: `permissions:`, the secrets passed to it, and its allowed tools."
+
+// agentSection lists what each AI coding agent did, even on a clean run: what
+// it ran, which secrets it opened and where it connected.
+func agentSection(m runschema.Manifest) string {
+	var sb strings.Builder
+	for _, a := range m.Agents {
+		sb.WriteString(fmt.Sprintf("### 🤖 AI agent activity: `%s`\n\n", a.Agent))
+		sb.WriteString(fmt.Sprintf("- **Secret files opened:** %s\n", codeList(a.SecretFiles)))
+		sb.WriteString(fmt.Sprintf("- **Hosts contacted:** %s\n", codeList(a.Hosts)))
+		sb.WriteString(fmt.Sprintf("- **Commands run:** %d\n\n", len(a.Commands)+a.CommandsOmitted))
+		if len(a.Commands) > 0 {
+			sb.WriteString("<details><summary>Commands (secret-looking strings masked)</summary>\n\n```text\n")
+			for _, c := range a.Commands {
+				// A command containing ``` would close the block early.
+				sb.WriteString(strings.ReplaceAll(c, "```", "'''") + "\n")
+			}
+			if a.CommandsOmitted > 0 {
+				sb.WriteString(fmt.Sprintf("… and %d more\n", a.CommandsOmitted))
+			}
+			sb.WriteString("```\n\n</details>\n\n")
+		}
+	}
+	return sb.String()
+}
+
+func advice(f runschema.Finding) string {
+	if f.Aggregatable.Package.Ecosystem == "agent" {
+		return strings.ReplaceAll(agentAdvice, "`", "")
+	}
+	return "Remove the dependency and regenerate package-lock.json."
+}
+
+func codeList(items []string) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	return "`" + strings.Join(items, "`, `") + "`"
 }
 
 func headline(f runschema.Finding) string {

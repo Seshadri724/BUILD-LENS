@@ -152,6 +152,31 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			minFindings:  1,
 		},
 		{
+			// Agent reads the secret, talks to its model API (allowed), then a
+			// prompt-injected curl sends it elsewhere.
+			name:         "agent-prompt-injection-exfil",
+			isMalicious:  true,
+			expectedHost: "paste.attacker.example",
+			expectedTier: "env",
+			expectedPkg:  "claude-code",
+			expectedRule: "TAINTED_EGRESS",
+			minFindings:  1,
+		},
+		{
+			// Reads .env, talks to the model API, git status / git push: no finding.
+			name:        "clean-agent-session",
+			isMalicious: false,
+		},
+		{
+			// The agent runs npm install; the dependency is blamed, not the agent.
+			name:         "agent-runs-malicious-postinstall",
+			isMalicious:  true,
+			expectedHost: "beacon.left-padx.example",
+			expectedPkg:  "left-padx",
+			expectedRule: "INSTALL_SCRIPT_EGRESS",
+			minFindings:  1,
+		},
+		{
 			name:         "runner-memory-scrape",
 			isMalicious:  true,
 			expectedTier: "process_memory",

@@ -34,6 +34,8 @@ Kernel probes capture process execs, successful opens of sensitive files (includ
 
 **What the probes do *not* do yet:** hostnames come from plain UDP DNS only, so lookups over DNS-over-HTTPS/TLS/TCP and hardcoded IPs stay as IPs, and a CDN IP shared by many names gets the most recently looked-up one; there is no TLS SNI yet. A successful `open` is evidence of access, not proof the bytes were read; only `openat` is hooked (not `open`/`openat2`), and UDP egress is not observed. "Bytes sent" is what the kernel accepted from that process for that destination over the whole run, not proof those bytes were the file contents. Findings are annotations on the run and the job summary; add the SARIF upload step below to also see them in GitHub code scanning and on PRs.
 
+**AI coding agents in CI.** When Claude Code, Codex, Gemini CLI, the Copilot CLI or Cursor's agent runs in the job, BuildLens labels everything it starts. The job summary gets an activity report even on a clean run: the commands the agent ran (secret-looking strings masked), the secret files it opened and the hosts it contacted. If the agent reads a secret and then anything in its process tree sends data somewhere other than its model API, that's a `TAINTED_EGRESS` finding tagged with the agent: the shape of a prompt-injection exfiltration. Pushing with `git` to `github.com` is allowed, since it shows in the diff; `api.github.com` is not, since a comment or gist can carry the secret out. Dependencies the agent installs are still blamed on the dependency, not the agent.
+
 **We never read file contents or network payloads.** Only paths, sizes, hashes, destinations, and byte counts leave the runner. That constraint is permanent — it is what makes the tool deployable without a MITM CA in every language runtime's trust store.
 
 ---
@@ -147,6 +149,7 @@ A security product that overstates coverage is a liability. Known gaps, document
 - **Linux only.** eBPF has no Windows or macOS equivalent we can ship at this cost. Windows and macOS runners are unmonitored.
 - **Kernel 5.8+ with BTF required.** Older kernels fail open — visibly, with a clear message, but they are unmonitored.
 - **Secrets in environment variables.** Reading `process.env` opens no file, so it can't be tainted. What BuildLens does flag is a dependency's install script calling any host other than the package registry and GitHub (`INSTALL_SCRIPT_EGRESS`). Packages that download binaries from other hosts (e.g. Puppeteer, Cypress) will trip it; the host list isn't configurable yet.
+- **AI agents are recognized by process name and command line.** Claude Code's path is tested with a simulated agent in CI, not a real session; the Copilot coding agent is matched by its CLI package name and hasn't been seen on a live run. An agent that reads a secret and then opens a PR with `gh` will be flagged.
 - **Attribution confidence varies.** When we cannot determine which package spawned a process, we say `unknown` rather than guessing. Naming the wrong package as malicious is worse than naming none.
 
 ---

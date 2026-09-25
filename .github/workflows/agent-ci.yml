@@ -153,6 +153,8 @@ jobs:
           (cd testdata/fixtures/live-integration && node node_modules/exfil-demo-pkg/postinstall.js)
           echo "Running live fixture environ-scrape and .git/config token read..."
           (cd testdata/fixtures/live-integration && node node_modules/runner-scrape-demo-pkg/postinstall.js)
+          echo "Running simulated prompt-injected AI agent..."
+          (cd testdata/fixtures/live-integration && node ../agent-sim/node_modules/@anthropic-ai/claude-code/cli.js)
 
           # Stop agent with SIGINT and wait for .done
           sudo -n kill -SIGINT -- -"$AGENT_PGID"
@@ -205,6 +207,12 @@ jobs:
           # DNS capture turns the destination IP into the hostname the package looked up
           grep -q '"dest_host": *"127.0.0.1.nip.io"' buildlens-manifest.json || (echo "Expected dest host resolved from DNS: 127.0.0.1.nip.io" && exit 1)
           grep -q '"kind":"dns"' /tmp/live-agent-events.jsonl || (echo "Expected dns events in the recorded stream" && exit 1)
+
+          # AI agent: exfil via a child curl is a finding tagged with the agent;
+          # its model API traffic is activity, not a finding.
+          jq -e '.findings[] | select(.rule=="TAINTED_EGRESS" and .context.agent=="claude-code" and .aggregatable.dest_host=="127.0.0.1.nip.io")' buildlens-manifest.json >/dev/null || (echo "Expected TAINTED_EGRESS via agent claude-code to 127.0.0.1.nip.io" && exit 1)
+          jq -e '.agents[] | select(.agent=="claude-code") | .hosts | index("api.anthropic.com")' buildlens-manifest.json >/dev/null || (echo "Expected api.anthropic.com in claude-code activity" && exit 1)
+          jq -e '[.findings[] | select(.aggregatable.dest_host=="api.anthropic.com")] | length == 0' buildlens-manifest.json >/dev/null || (echo "Model API traffic must not be a finding" && exit 1)
 
           # Verify SARIF output
           grep -q '"TAINTED_EGRESS"' buildlens.sarif || (echo "Expected TAINTED_EGRESS in SARIF" && exit 1)

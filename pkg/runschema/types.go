@@ -5,7 +5,7 @@ package runschema
 
 const (
 	SchemaVersion  = "1"
-	RulesetVersion = "1.2.0"
+	RulesetVersion = "1.3.0"
 )
 
 // PackageID is the only key used for cross-run aggregation.
@@ -93,6 +93,8 @@ type FindingContext struct {
 	Cwd          string      `json:"cwd,omitempty"`
 	Fingerprint  string      `json:"fingerprint,omitempty"`
 	Attribution  Attribution `json:"attribution,omitempty"`
+	// Agent names the AI coding agent whose process tree did this, if any.
+	Agent string `json:"agent,omitempty"`
 }
 
 type Finding struct {
@@ -109,4 +111,16 @@ type Manifest struct {
 	EventCount     int         `json:"event_count"`
 	AgentHealth    AgentHealth `json:"agent_health"`
 	Findings       []Finding   `json:"findings"`
+	// Agents reports what each AI coding agent's process tree did, findings or not.
+	Agents []AgentActivity `json:"agents,omitempty"`
+}
+
+// AgentActivity is repo-identifying (commands and paths). Must not enter
+// aggregate pipelines.
+type AgentActivity struct {
+	Agent           string   `json:"agent"`
+	Commands        []string `json:"commands"` // in order run, secret-looking strings masked
+	CommandsOmitted int      `json:"commands_omitted,omitempty"`
+	SecretFiles     []string `json:"secret_files"`
+	Hosts           []string `json:"hosts"`
 }

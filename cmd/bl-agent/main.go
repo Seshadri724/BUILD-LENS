@@ -161,6 +161,9 @@ func printSummary(m runschema.Manifest) {
 		}
 		line := fmt.Sprintf("[%s] %s | pkg: %s | file: %s | dest: %s | bytes sent: %s | chain: %s",
 			f.Severity, f.Rule, pkgName, f.Context.Path, dest, bytesSent, chain)
+		if f.Context.Agent != "" {
+			line += " | via AI agent: " + f.Context.Agent
+		}
 		// On Actions, the annotation line replaces the plain one: it still prints in
 		// the log, and also shows on the run page and PR checks.
 		if os.Getenv("GITHUB_ACTIONS") == "true" {
@@ -174,6 +177,17 @@ func printSummary(m runschema.Manifest) {
 			fmt.Println("  • " + line)
 		}
 	}
+	for _, a := range m.Agents {
+		fmt.Printf("AI agent %s: %d commands, secret files: %s, hosts: %s\n",
+			a.Agent, len(a.Commands)+a.CommandsOmitted, orNone(a.SecretFiles), orNone(a.Hosts))
+	}
+}
+
+func orNone(items []string) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	return strings.Join(items, ", ")
 }
 
 func uniqueDests(m runschema.Manifest) int {

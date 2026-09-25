@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -39,6 +40,7 @@ type procNode struct {
 	ProcessChain []string
 	Attribution  runschema.Attribution
 	Tainted      *taintMark
+	Agent        string // AI coding agent this process belongs to, if any
 }
 
 type taintMark struct {
@@ -92,15 +94,42 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 	procs := map[uint32]*procNode{}
 	dedupKeys := map[string]struct{}{}
 	var findings []runschema.Finding
+	activity := map[string]*agentLog{}
+	logFor := func(p *procNode) *agentLog {
+		if p.Agent == "" {
+			return nil
+		}
+		if activity[p.Agent] == nil {
+			activity[p.Agent] = &agentLog{files: map[string]struct{}{}, hosts: map[string]struct{}{}, cmds: map[string]struct{}{}}
+		}
+		return activity[p.Agent]
+	}
 
 	for _, e := range sorted {
 		proc, exists := procs[e.PID]
 		if !exists {
 			chain := []string{e.Comm}
+			parent := procs[e.PPID]
+			agent := agentName(e.Comm, e.Cmdline)
 			var attr runschema.Attribution
-			if parent, parentExists := procs[e.PPID]; parentExists {
-				chain = append(slices.Clone(parent.ProcessChain), e.Comm)
+			switch {
+			case strings.Contains(filepath.ToSlash(e.Cwd), "node_modules/"):
+				// A package's own lifecycle script: blame the package, not
+				// whatever (npm, an AI agent) started it.
+				attr = attribution.AttributeProcess(e.Cwd, e.Cmdline, opts.LockfilePath)
+				if parent != nil && parent.Attribution.Package.Name == attr.Package.Name {
+					attr = parent.Attribution // same package; keeps the lifecycle it started in
+				}
+			case agent != "":
+				attr = agentAttribution(agent)
+			case parent != nil:
 				attr = parent.Attribution
+			}
+			if parent != nil {
+				chain = append(slices.Clone(parent.ProcessChain), e.Comm)
+				if agent == "" {
+					agent = parent.Agent
+				}
 			}
 			if attr.IsUnknown() && (e.Cwd != "" || e.Cmdline != "") {
 				attr = attribution.AttributeProcess(e.Cwd, e.Cmdline, opts.LockfilePath)
@@ -113,6 +142,7 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				Cwd:          e.Cwd,
 				ProcessChain: chain,
 				Attribution:  attr,
+				Agent:        agent,
 			}
 			// Inherit taint from parent if within expiration window
 			if parent, parentExists := procs[e.PPID]; parentExists && parent.Tainted != nil {
@@ -138,6 +168,15 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 
 		switch e.Kind {
 		case "exec":
+			if a := agentName(proc.Comm, proc.Cmdline); a != "" && proc.Agent != a {
+				proc.Agent = a
+				proc.Attribution = agentAttribution(a)
+			}
+			// Record what the agent ran, not the agent binary itself (its
+			// command line is the prompt).
+			if l := logFor(proc); l != nil && agentName(proc.Comm, proc.Cmdline) == "" && proc.Cmdline != "" {
+				l.addCommand(redact(proc.Cmdline))
+			}
 			// If parent exists and child newly execed, inherit parent's taint if valid
 			if parent, parentExists := procs[e.PPID]; parentExists && parent.Tainted != nil {
 				if (e.TS - parent.Tainted.ts) <= taintWindow {
@@ -186,6 +225,9 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 					})
 				}
 			}
+			if l := logFor(proc); l != nil {
+				l.files[e.Path] = struct{}{}
+			}
 			proc.Tainted = &taintMark{
 				path:       e.Path,
 				tier:       tier,
@@ -199,6 +241,9 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 			dHost := ip
 			if h := resolvedHost(lookups[ip], e.TS); h != "" {
 				dHost = h
+			}
+			if l := logFor(proc); l != nil && !isLoopback(ip) {
+				l.hosts[dHost] = struct{}{}
 			}
 
 			var elapsedNano int64
@@ -241,6 +286,13 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				})
 				continue
 			}
+			if proc.Agent != "" && (isModelHost(dHost) || (isGit(proc.Comm) && dHost == "github.com")) {
+				// An agent sends what it reads to its model API by design, and
+				// pushes its work with git, where it's reviewable in the diff.
+				// Both show in the activity report; anywhere else is a finding,
+				// including api.github.com (a comment or gist carrying the secret).
+				continue
+			}
 			elapsedMS := elapsedNano / 1e6
 
 			dedupKey := fmt.Sprintf("%s|%s|%s|%s", proc.Tainted.path, dHost, proc.Attribution.Package.Name, proc.Comm)
@@ -280,6 +332,12 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 		}
 	}
 
+	for i := range findings {
+		if p := procs[findings[i].Context.PID]; p != nil {
+			findings[i].Context.Agent = p.Agent
+		}
+	}
+
 	if haveSendTelemetry {
 		for i := range findings {
 			if findings[i].Context.Dest == "" {
@@ -306,6 +364,7 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 		EventCount:     len(events),
 		AgentHealth:    opts.AgentHealth,
 		Findings:       findings,
+		Agents:         agentActivities(activity),
 	}
 }
 
@@ -519,4 +578,108 @@ func LoadJSONLFile(path string) ([]runschema.Event, error) {
 	}
 	defer f.Close()
 	return LoadJSONL(f)
+}
+
+// agentName recognizes an AI coding agent from its process name or command
+// line. Package managers are skipped so `npm i -g @anthropic-ai/claude-code`
+// isn't mistaken for the agent; `npx` still spawns the agent's own node process.
+// ponytail: fixed signatures; Copilot's coding agent is matched on its CLI
+// package name and hasn't been verified on a live run.
+func agentName(comm, cmdline string) string {
+	switch comm {
+	case "npm", "npx", "yarn", "pnpm":
+		return ""
+	}
+	c := strings.ToLower(cmdline)
+	switch {
+	case comm == "claude" || strings.Contains(c, "@anthropic-ai/claude-code"):
+		return "claude-code"
+	case comm == "codex" || strings.Contains(c, "@openai/codex"):
+		return "codex"
+	case comm == "gemini" || strings.Contains(c, "@google/gemini-cli"):
+		return "gemini-cli"
+	case comm == "copilot" || strings.Contains(c, "@github/copilot"):
+		return "copilot"
+	case comm == "cursor-agent":
+		return "cursor-agent"
+	}
+	return ""
+}
+
+func agentAttribution(agent string) runschema.Attribution {
+	return runschema.Attribution{
+		Package:    runschema.PackageID{Ecosystem: "agent", Name: agent},
+		Confidence: "probable",
+		Lifecycle:  "agent",
+	}
+}
+
+// isModelHost reports the model APIs agents send their context to.
+func isModelHost(host string) bool {
+	h := strings.ToLower(host)
+	for _, d := range []string{"anthropic.com", "openai.com", "githubcopilot.com"} {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return h == "chatgpt.com" || h == "generativelanguage.googleapis.com"
+}
+
+const maxAgentCommands = 50
+
+type agentLog struct {
+	commands []string
+	omitted  int
+	cmds     map[string]struct{}
+	files    map[string]struct{}
+	hosts    map[string]struct{}
+}
+
+func (l *agentLog) addCommand(cmd string) {
+	if _, seen := l.cmds[cmd]; seen {
+		return
+	}
+	l.cmds[cmd] = struct{}{}
+	if len(l.commands) >= maxAgentCommands {
+		l.omitted++
+		return
+	}
+	l.commands = append(l.commands, cmd)
+}
+
+func agentActivities(activity map[string]*agentLog) []runschema.AgentActivity {
+	var out []runschema.AgentActivity
+	for name, l := range activity {
+		out = append(out, runschema.AgentActivity{
+			Agent:           name,
+			Commands:        append([]string{}, l.commands...),
+			CommandsOmitted: l.omitted,
+			SecretFiles:     sortedKeys(l.files),
+			Hosts:           sortedKeys(l.hosts),
+		})
+	}
+	slices.SortFunc(out, func(a, b runschema.AgentActivity) int { return strings.Compare(a.Agent, b.Agent) })
+	return out
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// secretLike matches long unbroken runs typical of tokens and keys.
+var secretLike = regexp.MustCompile(`[A-Za-z0-9_\-+=]{20,}`)
+
+// redact masks secret-looking strings before a command reaches the job summary,
+// which anyone who can read the repo can see. ponytail: length heuristic; it
+// over-masks long hyphenated names and misses short secrets.
+func redact(cmd string) string {
+	if len(cmd) > 300 {
+		cmd = cmd[:300] + "…"
+	}
+	return secretLike.ReplaceAllString(cmd, "***")
 }
