@@ -151,6 +151,8 @@ jobs:
 
           echo "Running live fixture exfiltration script..."
           (cd testdata/fixtures/live-integration && node node_modules/exfil-demo-pkg/postinstall.js)
+          echo "Running live fixture environ-scrape and .git/config token read..."
+          (cd testdata/fixtures/live-integration && node node_modules/runner-scrape-demo-pkg/postinstall.js)
 
           # Stop agent with SIGINT and wait for .done
           sudo -n kill -SIGINT -- -"$AGENT_PGID"
@@ -190,9 +192,19 @@ jobs:
           grep -q '"file_tier": *"env"' buildlens-manifest.json || (echo "Expected file tier 'env'" && exit 1)
 
           # Verify the probe measured the exfiltrated payload, not just a connect attempt
-          BYTES=$(grep -o '"bytes_sent": *[0-9]*' buildlens-manifest.json | head -1 | grep -o '[0-9]*$')
+          BYTES=$(grep -o '"bytes_sent": *[0-9]*' buildlens-manifest.json | grep -o '[0-9]*$' | sort -n | tail -1)
           test -n "$BYTES" && [ "$BYTES" -gt 0 ] || (echo "Expected bytes_sent > 0, got '${BYTES}'" && exit 1)
           echo "bytes_sent=$BYTES"
+
+          # Kernel filter passes .git/config and /proc/<pid>/environ through to the correlator
+          grep -q '"name": *"runner-scrape-demo-pkg"' buildlens-manifest.json || (echo "Expected attributed package 'runner-scrape-demo-pkg'" && exit 1)
+          grep -q '"file_tier": *"git_credential"' buildlens-manifest.json || (echo "Expected .git/config read (file tier 'git_credential')" && exit 1)
+          grep -q '"rule": *"PROCESS_MEMORY_READ"' buildlens-manifest.json || (echo "Expected PROCESS_MEMORY_READ rule" && exit 1)
+          grep -q '"file_tier": *"process_memory"' buildlens-manifest.json || (echo "Expected file tier 'process_memory'" && exit 1)
+
+          # DNS capture turns the destination IP into the hostname the package looked up
+          grep -q '"dest_host": *"127.0.0.1.nip.io"' buildlens-manifest.json || (echo "Expected dest host resolved from DNS: 127.0.0.1.nip.io" && exit 1)
+          grep -q '"kind":"dns"' /tmp/live-agent-events.jsonl || (echo "Expected dns events in the recorded stream" && exit 1)
 
           # Verify SARIF output
           grep -q '"TAINTED_EGRESS"' buildlens.sarif || (echo "Expected TAINTED_EGRESS in SARIF" && exit 1)

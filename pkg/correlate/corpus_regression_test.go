@@ -112,6 +112,15 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			minFindings:  1,
 		},
 		{
+			name:         "dns-hostname-exfil",
+			isMalicious:  true,
+			expectedHost: "collect.exfil-drop.example",
+			expectedTier: "env",
+			expectedPkg:  "metrics-shim",
+			expectedRule: "TAINTED_EGRESS",
+			minFindings:  1,
+		},
+		{
 			name:         "runner-memory-scrape",
 			isMalicious:  true,
 			expectedTier: "process_memory",

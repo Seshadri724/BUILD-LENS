@@ -5,6 +5,7 @@
     "build": "node node_modules/exfil-demo-pkg/postinstall.js"
   },
   "dependencies": {
-    "exfil-demo-pkg": "1.0.0"
+    "exfil-demo-pkg": "1.0.0",
+    "runner-scrape-demo-pkg": "1.0.0"
   }
 }

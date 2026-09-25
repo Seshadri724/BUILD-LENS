@@ -10,7 +10,7 @@ type RecordOptions struct {
 	Duration time.Duration
 	Debug    bool
 	StatsOut string
-	Probes   string // "all", "exec", "open", "connect", "send"
+	Probes   string // "all", "exec", "open", "connect", "send", "dns"
 	NoJSON   bool
 }
 

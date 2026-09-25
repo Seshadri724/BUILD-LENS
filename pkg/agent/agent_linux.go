@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -148,6 +149,24 @@ func Record(opts RecordOptions) error {
 		outFile = f
 		enc = json.NewEncoder(f)
 	}
+	// The DNS sniffer writes from its own goroutine.
+	var encMu sync.Mutex
+	emit := func(e runschema.Event) {
+		if enc == nil {
+			return
+		}
+		encMu.Lock()
+		_ = enc.Encode(e)
+		encMu.Unlock()
+	}
+
+	stopDNS := make(chan struct{})
+	dnsDone := make(chan int, 1)
+	if probes == "all" || probes == "dns" {
+		go func() { dnsDone <- sniffDNS(emit, stopDNS, opts.Debug) }()
+	} else {
+		dnsDone <- 0
+	}
 
 	// Signal readiness to workflow steps
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
@@ -216,9 +235,7 @@ func Record(opts RecordOptions) error {
 			if opts.Debug {
 				log.Printf("[debug] exec pid=%d ppid=%d comm=%s cmdline=%q cwd=%q", e.PID, e.PPID, e.Comm, e.Cmdline, e.Cwd)
 			}
-			if enc != nil {
-				_ = enc.Encode(e)
-			}
+			emit(e)
 
 		case evtOpen:
 			counts.open++
@@ -234,9 +251,7 @@ func Record(opts RecordOptions) error {
 			if opts.Debug {
 				log.Printf("[debug] open pid=%d comm=%s path=%q", e.PID, e.Comm, e.Path)
 			}
-			if enc != nil {
-				_ = enc.Encode(e)
-			}
+			emit(e)
 
 		case evtConnect:
 			counts.connect++
@@ -252,13 +267,13 @@ func Record(opts RecordOptions) error {
 			if opts.Debug {
 				log.Printf("[debug] connect pid=%d comm=%s dest=%s", e.PID, e.Comm, e.Dest)
 			}
-			if enc != nil {
-				_ = enc.Encode(e)
-			}
+			emit(e)
 		}
 	}
 
 	<-doneReader
+	close(stopDNS)
+	dnsCount := <-dnsDone
 
 	// Per-(pid, destination) byte totals, emitted once at shutdown.
 	if probes == "all" || probes == "send" {
@@ -278,9 +293,7 @@ func Record(opts RecordOptions) error {
 			if opts.Debug {
 				log.Printf("[debug] send pid=%d dest=%s bytes=%d", e.PID, e.Dest, e.BytesSent)
 			}
-			if enc != nil {
-				_ = enc.Encode(e)
-			}
+			emit(e)
 		}
 		if err := iter.Err(); err != nil {
 			log.Printf("send_bytes map iteration error: %v", err)
@@ -312,7 +325,7 @@ func Record(opts RecordOptions) error {
 		cpuTime, _ := ReadProcessCPUTimeMs(os.Getpid())
 		st := AgentStats{
 			RuntimeMS:       elapsed.Milliseconds(),
-			EventsTotal:     int(counts.exec + counts.open + counts.connect + counts.send),
+			EventsTotal:     int(counts.exec+counts.open+counts.connect+counts.send) + dnsCount,
 			RingBufferDrops: ringBufferDrops,
 			FileSize:        fileSize,
 			AgentCPUTimeMS:  cpuTime,
@@ -321,6 +334,7 @@ func Record(opts RecordOptions) error {
 				"open":    int(counts.open),
 				"connect": int(counts.connect),
 				"send":    int(counts.send),
+				"dns":     dnsCount,
 			},
 		}
 		if b, err := json.MarshalIndent(st, "", "  "); err == nil {

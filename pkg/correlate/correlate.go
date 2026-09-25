@@ -20,6 +20,9 @@ const (
 	ruleTaintedEgress     = "TAINTED_EGRESS"
 	ruleProcessMemoryRead = "PROCESS_MEMORY_READ"
 	defaultTaintWindow    = 60 * 1e9 // 60 seconds in nanoseconds
+	// A DNS answer is read in userspace a moment after the kernel sees the
+	// connect it led to, so allow lookups stamped slightly after the connect.
+	dnsSlackNano = 1e9
 )
 
 type ScoreOptions struct {
@@ -58,8 +61,13 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 	// the timeline and attach them to findings by (pid, dest) afterwards.
 	sentBytes := map[string]uint64{}
 	haveSendTelemetry := false
+	lookups := map[string][]runschema.Event{} // IP -> dns events, by time
 	sorted := make([]runschema.Event, 0, len(events))
 	for _, e := range events {
+		if e.Kind == "dns" {
+			lookups[e.Dest] = append(lookups[e.Dest], e)
+			continue
+		}
 		if e.Kind == "send" {
 			haveSendTelemetry = true
 			sentBytes[flowKey(e.PID, e.Dest)] += e.BytesSent
@@ -68,6 +76,14 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 		sorted = append(sorted, e)
 	}
 	slices.SortFunc(sorted, cmpEvent)
+	for _, l := range lookups {
+		slices.SortFunc(l, func(a, b runschema.Event) int {
+			if n := cmp.Compare(a.TS, b.TS); n != 0 {
+				return n
+			}
+			return strings.Compare(a.Host, b.Host)
+		})
+	}
 
 	taintWindow := opts.TaintWindowNano
 	if taintWindow <= 0 {
@@ -195,6 +211,9 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 			elapsedMS := elapsedNano / 1e6
 
 			dHost := destHost(e.Dest)
+			if h := resolvedHost(lookups[dHost], e.TS); h != "" {
+				dHost = h
+			}
 			dedupKey := fmt.Sprintf("%s|%s|%s|%s", proc.Tainted.path, dHost, proc.Attribution.Package.Name, proc.Comm)
 			if _, seen := dedupKeys[dedupKey]; seen {
 				continue
@@ -234,6 +253,9 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 
 	if haveSendTelemetry {
 		for i := range findings {
+			if findings[i].Context.Dest == "" {
+				continue // no egress in this finding, so nothing was sent
+			}
 			n := sentBytes[flowKey(findings[i].Context.PID, findings[i].Context.Dest)]
 			findings[i].Aggregatable.BytesSent = &n
 		}
@@ -343,6 +365,20 @@ func readsOtherProcess(path string, pid uint32) bool {
 	return target != "self" && target != "thread-self" && target != fmt.Sprint(pid)
 }
 
+// resolvedHost is the name from the latest lookup of this IP before the connect.
+// ponytail: a CDN IP shared by many names gets the most recent one; per-process
+// attribution of lookups needs the resolver's socket, not a sniffer.
+func resolvedHost(lookups []runschema.Event, ts int64) string {
+	host := ""
+	for _, l := range lookups {
+		if l.TS > ts+dnsSlackNano {
+			break
+		}
+		host = l.Host
+	}
+	return host
+}
+
 func destHost(dest string) string {
 	if host, _, err := net.SplitHostPort(dest); err == nil {
 		return host
@@ -373,7 +409,7 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		if kind == "" || kind == "TAINTED_EGRESS" {
 			continue
 		}
-		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" {
+		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" && kind != "dns" {
 			continue
 		}
 		ev := runschema.Event{Kind: kind}
@@ -394,6 +430,9 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		}
 		if dest, ok := rec["dest"].(string); ok {
 			ev.Dest = dest
+		}
+		if host, ok := rec["host"].(string); ok {
+			ev.Host = host
 		}
 		if cmdline, ok := rec["cmdline"].(string); ok {
 			ev.Cmdline = cmdline

@@ -46,13 +46,15 @@ func UnknownAttribution() Attribution {
 // Event is one kernel observation. TS is the event timestamp (unix nano),
 // never wall clock at score time.
 type Event struct {
-	Kind    string `json:"kind"`
-	TS      int64  `json:"ts"`
-	PID     uint32 `json:"pid"`
-	PPID    uint32 `json:"ppid"`
-	Comm    string `json:"comm"`
-	Path    string `json:"path,omitempty"`
-	Dest    string `json:"dest,omitempty"`
+	Kind string `json:"kind"`
+	TS   int64  `json:"ts"`
+	PID  uint32 `json:"pid"`
+	PPID uint32 `json:"ppid"`
+	Comm string `json:"comm"`
+	Path string `json:"path,omitempty"`
+	Dest string `json:"dest,omitempty"`
+	// Host is set on "dns" events: the name that resolved to Dest (an IP, no port).
+	Host    string `json:"host,omitempty"`
 	Cmdline string `json:"cmdline,omitempty"`
 	Cwd     string `json:"cwd,omitempty"`
 	// BytesSent is set on "send" events: total bytes the kernel accepted from
