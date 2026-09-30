@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: Seshadri724/BUILD-LENS@v0.1.0   # first step, before your build
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: npm ci && npm test
 ```
 
@@ -65,7 +65,7 @@ jobs:
       - uses: Seshadri724/BUILD-LENS@v0.1.0
         with:
           upload-sarif: true
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: npm ci && npm test
 ```
 

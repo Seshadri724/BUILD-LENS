@@ -10,7 +10,6 @@ import (
 	"github.com/buildlens/buildlens/pkg/runschema"
 )
 
-
 func TestLiveProcessAttributionIntegration(t *testing.T) {
 	tempDir := t.TempDir()
 	lockfilePath := filepath.Join(tempDir, "package-lock.json")
