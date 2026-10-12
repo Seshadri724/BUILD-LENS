@@ -93,6 +93,7 @@ Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, TLS SNI h
 | Input | Default | |
 |---|---|---|
 | `lockfile` | `package-lock.json` | lockfile used to attribute processes to npm packages |
+| `allow-hosts` | `""` | comma-separated extra hosts install scripts may contact (e.g. binary mirrors) |
 | `manifest` | `buildlens-manifest.json` | where to write the run manifest |
 | `sarif` | `buildlens.sarif` | where to write SARIF |
 | `debug` | `false` | also keep every raw event |

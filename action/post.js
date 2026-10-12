@@ -137,7 +137,8 @@ function post() {
   console.log(`Scoring runtime events from ${eventsPath}...`);
 
   try {
-    const scoreCmd = `"${scoreBin}" score -in "${eventsPath}" -stats "${statsPath}" -out "${manifestOut}" -sarif "${sarifOut}" -lockfile "${lockfilePath}"`;
+    const allowHosts = (process.env['INPUT_ALLOW-HOSTS'] || '').replace(/"/g, '');
+    const scoreCmd = `"${scoreBin}" score -in "${eventsPath}" -stats "${statsPath}" -out "${manifestOut}" -sarif "${sarifOut}" -lockfile "${lockfilePath}" -allow-hosts "${allowHosts}"`;
     execSync(scoreCmd, { stdio: 'inherit' });
 
     if (fs.existsSync(manifestOut)) {

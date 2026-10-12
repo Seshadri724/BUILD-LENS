@@ -29,6 +29,11 @@ type ScoreOptions struct {
 	LockfilePath    string
 	TaintWindowNano int64
 	AgentHealth     runschema.AgentHealth
+	// AllowHosts adds to the built-in install-host list: extra hosts a
+	// dependency's install script may contact without tripping
+	// INSTALL_SCRIPT_EGRESS (e.g. Puppeteer/Cypress binary mirrors).
+	// Compared case-insensitively against bare hostnames/IPs, no wildcards.
+	AllowHosts []string
 }
 
 type procNode struct {
@@ -254,7 +259,7 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				// No secret read first. Still suspicious if a dependency's install
 				// script calls anything but the registry: secrets in env vars
 				// leave without ever opening a file.
-				if !isInstallScript(proc) || isLoopback(ip) || allowedInstallHost(dHost) {
+				if !isInstallScript(proc) || isLoopback(ip) || allowedInstallHost(dHost, opts.AllowHosts) {
 					continue
 				}
 				dedupKey := fmt.Sprintf("%s|%s|%s", ruleInstallScriptEgress, dHost, proc.Attribution.Package.Name)
@@ -467,16 +472,36 @@ func isInstallScript(p *procNode) bool {
 }
 
 // installHosts are where install scripts legitimately fetch packages, prebuilt
-// binaries and node-gyp headers. ponytail: fixed list; add an Action input for
-// extra hosts when a real package trips it.
+// binaries and node-gyp headers. Extra hosts come from ScoreOptions.AllowHosts
+// (the `allow-hosts` Action input) for packages like Puppeteer/Cypress that
+// download binaries from their own mirrors.
 var installHosts = []string{
 	"registry.npmjs.org", "registry.yarnpkg.com", "npm.pkg.github.com",
 	"github.com", "codeload.github.com", "objects.githubusercontent.com",
 	"release-assets.githubusercontent.com", "nodejs.org",
 }
 
-func allowedInstallHost(host string) bool {
-	return slices.Contains(installHosts, strings.ToLower(host))
+func allowedInstallHost(host string, extra []string) bool {
+	h := normalizeHost(host)
+	if slices.Contains(installHosts, h) {
+		return true
+	}
+	for _, e := range extra {
+		if normalizeHost(e) == h {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeHost lowercases, trims spaces and strips an optional :port so
+// user-supplied entries like "CDN.example.com:443" match bare dest hosts.
+func normalizeHost(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if bare, _, err := net.SplitHostPort(h); err == nil {
+		h = bare
+	}
+	return strings.TrimSuffix(h, ".")
 }
 
 func isLoopback(ip string) bool {

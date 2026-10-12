@@ -43,6 +43,7 @@ func score(args []string) error {
 	out := fs.String("out", "buildlens-manifest.json", "manifest JSON output")
 	sarifPath := fs.String("sarif", "", "optional SARIF output path")
 	lockfile := fs.String("lockfile", "package-lock.json", "path to package-lock.json for attribution")
+	allowHosts := fs.String("allow-hosts", "", "comma-separated extra hosts install scripts may contact")
 	statsPath := fs.String("stats", "", "optional path to agent stats JSON file")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -102,6 +103,7 @@ func score(args []string) error {
 			m = correlate.ScoreWithOptions(events, correlate.ScoreOptions{
 				LockfilePath: *lockfile,
 				AgentHealth:  health,
+				AllowHosts:   parseAllowHosts(*allowHosts),
 			})
 		}
 	}
@@ -181,6 +183,18 @@ func printSummary(m runschema.Manifest) {
 		fmt.Printf("AI agent %s: %d commands, secret files: %s, hosts: %s\n",
 			a.Agent, len(a.Commands)+a.CommandsOmitted, orNone(a.SecretFiles), orNone(a.Hosts))
 	}
+}
+
+// parseAllowHosts splits a comma-separated host list, dropping empties.
+// Matching itself is case-insensitive in the correlator.
+func parseAllowHosts(s string) []string {
+	var out []string
+	for _, h := range strings.Split(s, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func orNone(items []string) string {

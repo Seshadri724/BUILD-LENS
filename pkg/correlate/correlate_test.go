@@ -198,6 +198,76 @@ func TestAgentHealthDegradation(t *testing.T) {
 	}
 }
 
+func installScriptEgressEvents() []runschema.Event {
+	return []runschema.Event{
+		{
+			Kind:    "exec",
+			TS:      1000000000,
+			PID:     200,
+			PPID:    100,
+			Comm:    "node",
+			Cmdline: "node node_modules/puppy-helper/postinstall.js",
+			Cwd:     "/repo/node_modules/puppy-helper",
+		},
+		{
+			Kind: "connect",
+			TS:   1001000000,
+			PID:  200,
+			PPID: 100,
+			Comm: "node",
+			Dest: "198.51.100.7:443",
+		},
+	}
+}
+
+func TestInstallScriptEgressFiresByDefault(t *testing.T) {
+	m := correlate.Score(installScriptEgressEvents())
+	if m.Status != "findings" || len(m.Findings) != 1 {
+		t.Fatalf("status=%s n=%d", m.Status, len(m.Findings))
+	}
+	if m.Findings[0].Rule != "INSTALL_SCRIPT_EGRESS" {
+		t.Fatalf("rule=%s", m.Findings[0].Rule)
+	}
+}
+
+func TestAllowHostsSuppressesInstallScriptEgress(t *testing.T) {
+	m := correlate.ScoreWithOptions(installScriptEgressEvents(), correlate.ScoreOptions{
+		AllowHosts: []string{"198.51.100.7"},
+	})
+	if m.Status != "clean" || len(m.Findings) != 0 {
+		t.Fatalf("allowlisted IP should be clean, got status=%s findings=%d", m.Status, len(m.Findings))
+	}
+
+	// Hostname matching is case-insensitive and tolerates a :port suffix.
+	dnsEvents := []runschema.Event{
+		{
+			Kind:    "exec",
+			TS:      1000000000,
+			PID:     201,
+			PPID:    100,
+			Comm:    "node",
+			Cmdline: "node node_modules/puppy-helper/postinstall.js",
+			Cwd:     "/repo/node_modules/puppy-helper",
+		},
+		{Kind: "dns", TS: 1000500000, Host: "cdn.custom.example", Dest: "198.51.100.8"},
+		{Kind: "connect", TS: 1001000000, PID: 201, PPID: 100, Comm: "node", Dest: "198.51.100.8:443"},
+	}
+	m = correlate.ScoreWithOptions(dnsEvents, correlate.ScoreOptions{
+		AllowHosts: []string{"CDN.Custom.Example:443"},
+	})
+	if m.Status != "clean" || len(m.Findings) != 0 {
+		t.Fatalf("allowlisted hostname should be clean, got status=%s findings=%d", m.Status, len(m.Findings))
+	}
+
+	// An unrelated allow entry must not silence the finding.
+	m = correlate.ScoreWithOptions(installScriptEgressEvents(), correlate.ScoreOptions{
+		AllowHosts: []string{"other.example"},
+	})
+	if m.Status != "findings" || len(m.Findings) != 1 {
+		t.Fatalf("unrelated allow-host should still fire, got status=%s n=%d", m.Status, len(m.Findings))
+	}
+}
+
 func scoreFile(t *testing.T, name string) runschema.Manifest {
 	t.Helper()
 	return correlate.Score(load(t, name))
