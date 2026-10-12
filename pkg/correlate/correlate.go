@@ -111,7 +111,7 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 			chain := []string{e.Comm}
 			parent := procs[e.PPID]
 			agent := agentName(e.Comm, e.Cmdline)
-			var attr runschema.Attribution
+			attr := runschema.UnknownAttribution()
 			switch {
 			case strings.Contains(filepath.ToSlash(e.Cwd), "node_modules/"):
 				// A package's own lifecycle script: blame the package, not

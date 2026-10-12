@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: Seshadri724/BUILD-LENS@v0.1.0
+      - uses: Seshadri724/BUILD-LENS@v0.2.0
       - uses: actions/checkout@v5
       - run: npm ci && npm test
 ```
