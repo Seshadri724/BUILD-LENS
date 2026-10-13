@@ -1,0 +1,3 @@
+{"kind":"exec","ts":1000000000,"pid":70,"ppid":1,"comm":"node","cwd":"/repo","cmdline":"npm ci"}
+{"kind":"wouldblock","ts":1001000000,"pid":70,"ppid":1,"comm":"node","dest":"198.51.100.9"}
+{"kind":"connect","ts":1002000000,"pid":70,"ppid":1,"comm":"node","dest":"198.51.100.9:443"}

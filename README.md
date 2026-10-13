@@ -86,7 +86,7 @@ Pin a release tag (`@v0.1.0`) or the moving `@v0` tag, not a branch. Each releas
 | Passwordless `sudo -n` | loading eBPF needs root | warning, exit 0 |
 | `package-lock.json` in the workspace root (or set `lockfile:`) | names the npm package | findings say `unknown` package |
 
-Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, and blocking (see *Honest limitations*).
+Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, and deny-mode blocking (see *Honest limitations*).
 
 ### Inputs
 
@@ -127,7 +127,7 @@ Read them in that order. PRD defines what and why, STRATEGY defines why it compo
 
 **Phase 0 mechanism: pass (CP-0.1, CP-0.2).** eBPF loads on GitHub-hosted `ubuntu-22.04` / `24.04`. Overhead of the *exec-only* attach-once probe was ~0% on a tiny `npm ci` — re-measure once the full probe set exists. **CP-0.3 (vs Harden-Runner) is still a human judgment call.**
 
-**Phase 1 — working agent, narrow probe set.** `bl-agent record` runs as the Action's `main`/`post` and captures exec, successful sensitive-file opens, IPv4/IPv6 TCP connects, and per-destination bytes sent. `bl-agent score` produces a versioned manifest + SARIF (`TAINTED_EGRESS`, `PROCESS_MEMORY_READ`, `INSTALL_SCRIPT_EGRESS`; fail-open, replay-stable) with ancestor-process taint and npm package attribution from the lockfile. CI verifies this end to end against a synthetic exfiltrating `postinstall`, including `bytes_sent > 0`, a `.git/config` token read, another process's `/proc/<pid>/environ`, and a hostname resolved through live DNS. Not built: TLS SNI, pip attribution, enforcement.
+**Phase 1 — working agent, narrow probe set.** `bl-agent record` runs as the Action's `main`/`post` and captures exec, successful sensitive-file opens, IPv4/IPv6 TCP connects, and per-destination bytes sent. `bl-agent score` produces a versioned manifest + SARIF (`TAINTED_EGRESS`, `PROCESS_MEMORY_READ`, `INSTALL_SCRIPT_EGRESS`, `ENV_EXFIL`; fail-open, replay-stable) with ancestor-process taint and npm package attribution from the lockfile. CI verifies this end to end against a synthetic exfiltrating `postinstall`, including `bytes_sent > 0`, a `.git/config` token read, another process's `/proc/<pid>/environ`, and a hostname resolved through live DNS. An audit-only cgroup hook (`record -enforce audit`) logs would-block egress but always allows; deny verdicts are Phase 2. Not built: pip attribution.
 
 ---
 

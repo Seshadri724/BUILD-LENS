@@ -100,6 +100,11 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			name: "clean-self-environ-read",
 		},
 		{
+			// Audit-hook observations are informational: no findings on
+			// their own, now or ever (deny verdicts are Phase 2).
+			name: "clean-wouldblock-audit",
+		},
+		{
 			// Reads .env, talks to the model API, git status / git push: no finding.
 			name:        "clean-agent-session",
 			isMalicious: false,

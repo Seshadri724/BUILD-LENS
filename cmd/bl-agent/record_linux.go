@@ -16,6 +16,7 @@ func record(args []string) error {
 	probes := fs.String("probes", "all", "which probes to attach (all, exec, open, connect, send, dns)")
 	noJSON := fs.Bool("no-json", false, "disable json file output")
 	statsOut := fs.String("stats-out", "", "optional telemetry stats output file")
+	enforce := fs.String("enforce", "off", "egress enforcement: off (default) or audit (attach cgroup hook that logs would-block egress but always allows)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -27,5 +28,6 @@ func record(args []string) error {
 		Probes:   *probes,
 		NoJSON:   *noJSON,
 		StatsOut: *statsOut,
+		Enforce:  *enforce,
 	})
 }

@@ -635,7 +635,7 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		if kind == "" || kind == "TAINTED_EGRESS" {
 			continue
 		}
-		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" && kind != "dns" && kind != "sni" {
+		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" && kind != "dns" && kind != "sni" && kind != "wouldblock" {
 			continue
 		}
 		ev := runschema.Event{Kind: kind}

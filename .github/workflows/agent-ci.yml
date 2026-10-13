@@ -134,9 +134,13 @@ jobs:
           OUT_SARIF=buildlens.sarif
 
           echo "Starting bl-agent daemon..."
+          # -enforce audit exercises the cgroup hook every run: it always
+          # allows, so the observe path is unaffected. Verifier or attach
+          # failures fail open (logged, no hook) and must not fail this job.
           setsid sudo -n ./bin/bl-agent record \
             -out "$OUT_EVENTS" \
             -stats-out "$OUT_STATS" \
+            -enforce audit \
             -debug &
           AGENT_PGID=$!
 
@@ -209,6 +213,15 @@ jobs:
           # DNS capture turns the destination IP into the hostname the package looked up
           grep -q '"dest_host": *"127.0.0.1.nip.io"' buildlens-manifest.json || (echo "Expected dest host resolved from DNS: 127.0.0.1.nip.io" && exit 1)
           grep -q '"kind":"dns"' /tmp/live-agent-events.jsonl || (echo "Expected dns events in the recorded stream" && exit 1)
+
+          # Audit hook: informational only. Presence proves cgroup attach +
+          # verifier acceptance on this runner; absence (fail-open) must not
+          # fail the job — check the daemon log for the reason instead.
+          if grep -q '"kind":"wouldblock"' /tmp/live-agent-events.jsonl; then
+            echo "Audit hook active: wouldblock observations present"
+          else
+            echo "Audit hook inactive on this runner (fail-open); see daemon log for why"
+          fi
 
           # AI agent: exfil via a child curl is a finding tagged with the agent;
           # its model API traffic is activity, not a finding.

@@ -173,6 +173,23 @@ func Record(opts RecordOptions) error {
 		sniDone <- 0
 	}
 
+	// Enforce-audit hook: observe-only by a stronger mechanism. Any failure
+	// (no cgroupv2, attach denied, verifier) fails open to plain observe.
+	var enforce *enforceHandle
+	stopEnforce := make(chan struct{})
+	enforceDone := make(chan int, 1)
+	if opts.Enforce == "audit" {
+		if h, err := attachEnforceHook(); err != nil {
+			log.Printf("BuildLens agent: enforce hook unavailable (%v); continuing observe-only", err)
+			enforceDone <- 0
+		} else {
+			enforce = h
+			go func() { enforceDone <- h.readEnforceEvents(emit, stopEnforce, opts.Debug) }()
+		}
+	} else {
+		enforceDone <- 0
+	}
+
 	// Signal readiness to workflow steps
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
 		return fmt.Errorf("write readiness marker: %w", err)
@@ -283,6 +300,11 @@ func Record(opts RecordOptions) error {
 	dnsCount := <-dnsDone
 	close(stopSNI)
 	sniCount := <-sniDone
+	close(stopEnforce)
+	enforceCount := <-enforceDone
+	if enforce != nil {
+		enforce.Close()
+	}
 
 	// Per-(pid, destination) byte totals, emitted once at shutdown.
 	if probes == "all" || probes == "send" {
@@ -334,17 +356,18 @@ func Record(opts RecordOptions) error {
 		cpuTime, _ := ReadProcessCPUTimeMs(os.Getpid())
 		st := AgentStats{
 			RuntimeMS:       elapsed.Milliseconds(),
-			EventsTotal:     int(counts.exec+counts.open+counts.connect+counts.send) + dnsCount + sniCount,
+			EventsTotal:     int(counts.exec+counts.open+counts.connect+counts.send) + dnsCount + sniCount + enforceCount,
 			RingBufferDrops: ringBufferDrops,
 			FileSize:        fileSize,
 			AgentCPUTimeMS:  cpuTime,
 			Counts: map[string]int{
-				"exec":    int(counts.exec),
-				"open":    int(counts.open),
-				"connect": int(counts.connect),
-				"send":    int(counts.send),
-				"dns":     dnsCount,
-				"sni":     sniCount,
+				"exec":       int(counts.exec),
+				"open":       int(counts.open),
+				"connect":    int(counts.connect),
+				"send":       int(counts.send),
+				"dns":        dnsCount,
+				"sni":        sniCount,
+				"wouldblock": enforceCount,
 			},
 		}
 		if b, err := json.MarshalIndent(st, "", "  "); err == nil {
