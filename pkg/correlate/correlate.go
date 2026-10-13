@@ -228,6 +228,15 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				if !readsOtherProcess(e.Path, e.PID) {
 					continue
 				}
+				// Self-observation: the agent reads /proc/<pid>/environ at
+				// every exec to capture env names. Flagging that would
+				// incriminate the observer on every run. The opens stay in
+				// the event stream for audit; they just aren't findings.
+				// ponytail: comm match, like isGit — a payload named
+				// "bl-agent" evades this the same way.
+				if proc.Comm == "bl-agent" {
+					continue
+				}
 				// Scraping another process's memory or environment is the
 				// finding on its own; secrets can leave via logs, not just egress.
 				dedupKey := fmt.Sprintf("%s|%s|%s|%s", ruleProcessMemoryRead, e.Path, proc.Attribution.Package.Name, proc.Comm)

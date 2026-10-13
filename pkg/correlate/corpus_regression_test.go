@@ -95,7 +95,13 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			minFindings:  1,
 		},
 		{
-			name:        "clean-git-fetch",
+			// The agent's own /proc environ reads (env-name capture) are
+			// self-observation, never findings.
+			name: "clean-self-environ-read",
+		},
+		{
+			// Reads .env, talks to the model API, git status / git push: no finding.
+			name:        "clean-agent-session",
 			isMalicious: false,
 		},
 		{

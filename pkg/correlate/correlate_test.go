@@ -402,6 +402,30 @@ func TestEnvExfilExpiresWithWindow(t *testing.T) {
 	}
 }
 
+func TestSelfEnvironReadExcluded(t *testing.T) {
+	// The agent reads /proc/<pid>/environ at every exec for env-name
+	// capture. Those self-observation opens must never become findings —
+	// otherwise every monitored run flags its own observer.
+	selfRead := []runschema.Event{
+		{Kind: "exec", TS: 1000000000, PID: 50, PPID: 1, Comm: "bl-agent"},
+		{Kind: "open", TS: 1001000000, PID: 50, PPID: 1, Comm: "bl-agent", Path: "/proc/60/environ"},
+		{Kind: "connect", TS: 1002000000, PID: 50, PPID: 1, Comm: "bl-agent", Dest: "198.51.100.9:443"},
+	}
+	m := correlate.Score(selfRead)
+	if m.Status != "clean" || len(m.Findings) != 0 {
+		t.Fatalf("agent self-read must stay clean, got %+v", m.Findings)
+	}
+
+	// Same read from anything else still fires.
+	otherRead := []runschema.Event{
+		{Kind: "open", TS: 1000000000, PID: 60, PPID: 1, Comm: "node", Path: "/proc/50/environ"},
+	}
+	m = correlate.Score(otherRead)
+	if len(m.Findings) != 1 || m.Findings[0].Rule != "PROCESS_MEMORY_READ" {
+		t.Fatalf("third-party environ read must fire: %+v", m.Findings)
+	}
+}
+
 func scoreFile(t *testing.T, name string) runschema.Manifest {
 	t.Helper()
 	return correlate.Score(load(t, name))

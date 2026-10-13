@@ -1,0 +1,3 @@
+{"kind":"exec","ts":1000000000,"pid":50,"ppid":1,"comm":"bl-agent"}
+{"kind":"open","ts":1001000000,"pid":50,"ppid":1,"comm":"bl-agent","path":"/proc/60/environ"}
+{"kind":"connect","ts":1002000000,"pid":50,"ppid":1,"comm":"bl-agent","dest":"198.51.100.9:443"}
