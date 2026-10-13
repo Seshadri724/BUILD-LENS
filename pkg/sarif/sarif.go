@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/buildlens/buildlens/pkg/runschema"
+	"github.com/buildlens/buildlens/pkg/triage"
 )
 
 type logFile struct {
@@ -106,6 +107,7 @@ func FromManifest(m runschema.Manifest) logFile {
 		if f.Context.Agent != "" {
 			msg = strings.Replace(msg, "\nPackage:", "\nAI agent: "+f.Context.Agent+"\nPackage:", 1)
 		}
+		msg += "\n\n" + triage.Render(f)
 
 		fp := f.Context.Fingerprint
 		if fp == "" {
@@ -222,18 +224,19 @@ func GenerateStepSummary(m runschema.Manifest) string {
 		}
 		sb.WriteString("**Recommended Action:**\n")
 		if pkg.Ecosystem == "agent" {
-			sb.WriteString(agentAdvice + "\n\n")
+			sb.WriteString(triage.PromptInjectionAdvice + "\n\n")
 		} else {
 			sb.WriteString("```bash\nnpm uninstall " + pkg.Name + " && npm install --package-lock-only\n```\n\n")
 		}
+		sb.WriteString("<details><summary>Suggested context (auto-generated)</summary>\n\n")
+		sb.WriteString(triage.Render(f))
+		sb.WriteString("\n</details>\n\n")
 		sb.WriteString("---\n\n")
 	}
 
 	sb.WriteString(agentSection(m))
 	return sb.String()
 }
-
-const agentAdvice = "Rotate the secret. Then read the issue, PR comment or file the agent was working from for instructions it shouldn't have followed (prompt injection), and limit what the agent's job can reach: `permissions:`, the secrets passed to it, and its allowed tools."
 
 // agentSection lists what each AI coding agent did, even on a clean run: what
 // it ran, which secrets it opened and where it connected.
@@ -261,7 +264,7 @@ func agentSection(m runschema.Manifest) string {
 
 func advice(f runschema.Finding) string {
 	if f.Aggregatable.Package.Ecosystem == "agent" {
-		return strings.ReplaceAll(agentAdvice, "`", "")
+		return strings.ReplaceAll(triage.PromptInjectionAdvice, "`", "")
 	}
 	return "Remove the dependency and regenerate package-lock.json."
 }
