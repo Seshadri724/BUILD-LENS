@@ -105,6 +105,37 @@ func TestRenderAgentExfil(t *testing.T) {
 	}
 }
 
+func TestRenderEnvExfil(t *testing.T) {
+	f := runschema.Finding{
+		Rule:     "ENV_EXFIL",
+		Severity: "high",
+		Aggregatable: runschema.FindingAgg{
+			Package:  runschema.PackageID{Ecosystem: "npm", Name: "grabber", Version: "2.0.0"},
+			DestHost: "harvest.grabber.example",
+		},
+		Context: runschema.FindingContext{
+			PID:          910,
+			Comm:         "node",
+			Dest:         "198.51.100.61:443",
+			ProcessChain: []string{"node"},
+			Cwd:          "/repo/node_modules/grabber",
+			Fingerprint:  "envfp01",
+			EnvVars:      []string{"AWS_SECRET_ACCESS_KEY"},
+			Attribution: runschema.Attribution{
+				Package:    runschema.PackageID{Ecosystem: "npm", Name: "grabber", Version: "2.0.0"},
+				Confidence: "probable",
+				Lifecycle:  "postinstall",
+			},
+		},
+	}
+	out := triage.Render(f)
+	for _, want := range []string{"ENV_EXFIL", "AWS_SECRET_ACCESS_KEY", "npm uninstall grabber", "Rotate the exposed secret"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("narrative missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderUnknownPackage(t *testing.T) {
 	f := taintedFinding()
 	f.Aggregatable.Package = runschema.PackageID{}

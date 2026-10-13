@@ -204,6 +204,16 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			expectedRule: "TAINTED_EGRESS",
 			minFindings:  1,
 		},
+		{
+			// Install script holding secret-named env vars phones an unknown
+			// host: ENV_EXFIL upgrades INSTALL_SCRIPT_EGRESS with the evidence.
+			name:         "env-holder-exfil",
+			isMalicious:  true,
+			expectedHost: "harvest.grabber.example",
+			expectedPkg:  "grabber",
+			expectedRule: "ENV_EXFIL",
+			minFindings:  1,
+		},
 	}
 
 	var tp, fp, fn, tn int

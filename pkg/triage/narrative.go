@@ -53,6 +53,8 @@ func Render(f runschema.Finding) string {
 		fmt.Fprintf(&sb, "- **What happened:** `%s` — this process read another process's memory or environment; secrets can leave via logs, not just egress.\n", f.Rule)
 	case "INSTALL_SCRIPT_EGRESS":
 		fmt.Fprintf(&sb, "- **What happened:** `%s` — this dependency's install script contacted a host outside the registry allowlist.\n", f.Rule)
+	case "ENV_EXFIL":
+		fmt.Fprintf(&sb, "- **What happened:** `%s` — this install script held secret-named environment variables and contacted an unexpected host.\n", f.Rule)
 	default:
 		fmt.Fprintf(&sb, "- **What happened:** `%s` (%s).\n", f.Rule, f.Severity)
 	}
@@ -93,6 +95,9 @@ func Render(f runschema.Finding) string {
 	if f.Context.Agent != "" {
 		fmt.Fprintf(&sb, "- **Via AI agent:** `%s`\n", f.Context.Agent)
 	}
+	if len(f.Context.EnvVars) > 0 {
+		fmt.Fprintf(&sb, "- **Env vars held:** `%s` (names only — values never leave the runner)\n", strings.Join(f.Context.EnvVars, "`, `"))
+	}
 	if f.Context.Cwd != "" {
 		fmt.Fprintf(&sb, "- **Working dir:** `%s`\n", f.Context.Cwd)
 	}
@@ -123,7 +128,7 @@ func fixBlock(f runschema.Finding) string {
 	default:
 		fmt.Fprintf(&sb, "  ```bash\n  npm uninstall %s && npm install --package-lock-only\n  ```\n", pkg.Name)
 	}
-	if slices.Contains(credentialTiers, f.Aggregatable.FileTier) || f.Rule == "PROCESS_MEMORY_READ" {
+	if slices.Contains(credentialTiers, f.Aggregatable.FileTier) || f.Rule == "PROCESS_MEMORY_READ" || len(f.Context.EnvVars) > 0 {
 		sb.WriteString("  Rotate the exposed secret: it was readable at read time — assume it left.\n")
 	}
 	return sb.String()

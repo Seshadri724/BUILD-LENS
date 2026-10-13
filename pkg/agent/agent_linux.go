@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/buildlens/buildlens/pkg/correlate"
 	"github.com/buildlens/buildlens/pkg/runschema"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -223,18 +224,20 @@ func Record(opts RecordOptions) error {
 		switch ev.Kind {
 		case evtExec:
 			counts.exec++
-			// Live process metadata enrichment via /proc
+			// Live process metadata enrichment via /proc. Environ contributes
+			// secret-bearing variable NAMES only; values never leave the runner.
 			cmdline := ReadProcessCmdline(ev.PID)
 			cwd := ReadProcessCwd(ev.PID)
 
 			e := runschema.Event{
-				Kind:    "exec",
-				TS:      nowNano,
-				PID:     ev.PID,
-				PPID:    ev.PPID,
-				Comm:    comm,
-				Cmdline: cmdline,
-				Cwd:     cwd,
+				Kind:     "exec",
+				TS:       nowNano,
+				PID:      ev.PID,
+				PPID:     ev.PPID,
+				Comm:     comm,
+				Cmdline:  cmdline,
+				Cwd:      cwd,
+				EnvNames: correlate.SensitiveEnvNames(ReadProcessEnvNames(ev.PID)),
 			}
 			if opts.Debug {
 				log.Printf("[debug] exec pid=%d ppid=%d comm=%s cmdline=%q cwd=%q", e.PID, e.PPID, e.Comm, e.Cmdline, e.Cwd)

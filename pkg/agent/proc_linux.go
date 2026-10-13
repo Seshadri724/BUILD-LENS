@@ -35,6 +35,27 @@ func ReadProcessCwd(pid uint32) string {
 	return cwd
 }
 
+// ReadProcessEnvNames returns the environment variable NAMES of a process
+// from /proc/<pid>/environ. Values are never materialized: each entry is cut
+// at the first '=' and only the name survives. Missing process (already
+// exited) reports nothing — capture is best-effort by design.
+func ReadProcessEnvNames(pid uint32) []string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range bytes.Split(b, []byte{0}) {
+		if i := bytes.IndexByte(entry, '='); i > 0 {
+			out = append(out, string(entry[:i]))
+		}
+		if len(out) >= 128 {
+			break
+		}
+	}
+	return out
+}
+
 // ReadProcessCPUTimeMs reads user and system CPU ticks for a pid from /proc/<pid>/stat.
 func ReadProcessCPUTimeMs(pid int) (int64, error) {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))

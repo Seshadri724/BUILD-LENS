@@ -330,6 +330,78 @@ func TestSNIBeatsStaleDNS(t *testing.T) {
 	}
 }
 
+func TestEnvExfilUpgradesInstallScriptFinding(t *testing.T) {
+	events := []runschema.Event{
+		{
+			Kind: "exec", TS: 1000000000, PID: 400, PPID: 1, Comm: "node",
+			Cmdline: "node node_modules/grabber/postinstall.js", Cwd: "/repo/node_modules/grabber",
+			EnvNames: []string{"AWS_SECRET_ACCESS_KEY", "PATH"},
+		},
+		{Kind: "connect", TS: 1001000000, PID: 400, PPID: 1, Comm: "node", Dest: "198.51.100.61:443"},
+	}
+	m := correlate.Score(events)
+	if len(m.Findings) != 1 {
+		t.Fatalf("want exactly 1 finding (upgrade, not duplicate), got %d", len(m.Findings))
+	}
+	f := m.Findings[0]
+	if f.Rule != "ENV_EXFIL" {
+		t.Fatalf("rule=%s, want ENV_EXFIL", f.Rule)
+	}
+	if len(f.Context.EnvVars) != 1 || f.Context.EnvVars[0] != "AWS_SECRET_ACCESS_KEY" {
+		t.Errorf("env_vars=%q, want the held key only", f.Context.EnvVars)
+	}
+	if f.Context.Fingerprint == "" {
+		t.Error("expected deterministic fingerprint")
+	}
+}
+
+func TestEnvExfilBenignEnvStaysInstallScript(t *testing.T) {
+	events := []runschema.Event{
+		{
+			Kind: "exec", TS: 1000000000, PID: 401, PPID: 1, Comm: "node",
+			Cmdline: "node node_modules/grabber/postinstall.js", Cwd: "/repo/node_modules/grabber",
+			EnvNames: []string{"PATH", "HOME", "CI"},
+		},
+		{Kind: "connect", TS: 1001000000, PID: 401, PPID: 1, Comm: "node", Dest: "198.51.100.61:443"},
+	}
+	m := correlate.Score(events)
+	if len(m.Findings) != 1 || m.Findings[0].Rule != "INSTALL_SCRIPT_EGRESS" {
+		t.Fatalf("benign env must not upgrade: %+v", m.Findings)
+	}
+}
+
+func TestEnvExfilNonInstallScriptStaysClean(t *testing.T) {
+	// A first-party deploy step holding secrets cannot be told apart from a
+	// legitimate deployment: no finding. Baselines (Phase 2) own this case.
+	events := []runschema.Event{
+		{
+			Kind: "exec", TS: 1000000000, PID: 402, PPID: 1, Comm: "node",
+			Cmdline: "node scripts/deploy.js", Cwd: "/repo",
+			EnvNames: []string{"AWS_SECRET_ACCESS_KEY"},
+		},
+		{Kind: "connect", TS: 1001000000, PID: 402, PPID: 1, Comm: "node", Dest: "198.51.100.61:443"},
+	}
+	m := correlate.Score(events)
+	if m.Status != "clean" || len(m.Findings) != 0 {
+		t.Fatalf("deploy-like egress must stay clean, got %+v", m.Findings)
+	}
+}
+
+func TestEnvExfilExpiresWithWindow(t *testing.T) {
+	events := []runschema.Event{
+		{
+			Kind: "exec", TS: 1000000000, PID: 403, PPID: 1, Comm: "node",
+			Cmdline: "node node_modules/grabber/postinstall.js", Cwd: "/repo/node_modules/grabber",
+			EnvNames: []string{"GITHUB_TOKEN"},
+		},
+		{Kind: "connect", TS: 1000000000 + (300 * 1e9), PID: 403, PPID: 1, Comm: "node", Dest: "198.51.100.61:443"},
+	}
+	m := correlate.Score(events)
+	if len(m.Findings) != 1 || m.Findings[0].Rule != "INSTALL_SCRIPT_EGRESS" {
+		t.Fatalf("expired env must downgrade to install-script egress: %+v", m.Findings)
+	}
+}
+
 func scoreFile(t *testing.T, name string) runschema.Manifest {
 	t.Helper()
 	return correlate.Score(load(t, name))

@@ -22,6 +22,7 @@ const (
 	ruleTaintedEgress       = "TAINTED_EGRESS"
 	ruleProcessMemoryRead   = "PROCESS_MEMORY_READ"
 	ruleInstallScriptEgress = "INSTALL_SCRIPT_EGRESS"
+	ruleEnvExfil            = "ENV_EXFIL"
 	defaultTaintWindow      = 60 * 1e9 // 60 seconds in nanoseconds
 )
 
@@ -46,6 +47,11 @@ type procNode struct {
 	Attribution  runschema.Attribution
 	Tainted      *taintMark
 	Agent        string // AI coding agent this process belongs to, if any
+	// envVars holds sensitive environment variable NAMES present at exec
+	// (values never captured). Environ is fork-inherited, so children start
+	// with the parent's set until their own exec refreshes it.
+	envVars []string
+	envTS   int64
 }
 
 type taintMark struct {
@@ -162,6 +168,14 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 					proc.Tainted = parent.Tainted
 				}
 			}
+			// Environ is fork-inherited: start with the parent's sensitive
+			// names until this process's own exec refreshes them.
+			if parent, parentExists := procs[e.PPID]; parentExists && len(parent.envVars) > 0 {
+				if (e.TS - parent.envTS) <= taintWindow {
+					proc.envVars = parent.envVars
+					proc.envTS = parent.envTS
+				}
+			}
 			procs[e.PID] = proc
 		}
 
@@ -184,6 +198,12 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				proc.Agent = a
 				proc.Attribution = agentAttribution(a)
 			}
+			// execve replaces the environment: refresh from the agent-captured
+			// names (already sensitive-filtered; empty means clean). This also
+			// clears inherited names — a re-exec without secrets is clean, and
+			// recordings that predate capture simply never taint.
+			proc.envVars = SensitiveEnvNames(e.EnvNames)
+			proc.envTS = e.TS
 			// Record what the agent ran, not the agent binary itself (its
 			// command line is the prompt).
 			if l := logFor(proc); l != nil && agentName(proc.Comm, proc.Cmdline) == "" && proc.Cmdline != "" {
@@ -275,7 +295,13 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				if !isInstallScript(proc) || isLoopback(ip) || allowedInstallHost(dHost, opts.AllowHosts) {
 					continue
 				}
-				dedupKey := fmt.Sprintf("%s|%s|%s", ruleInstallScriptEgress, dHost, proc.Attribution.Package.Name)
+				// An install script holding secret-named variables upgrades the
+				// finding: same trigger domain, but the held names are evidence.
+				rule := ruleInstallScriptEgress
+				if len(freshEnvVars(proc, e.TS, taintWindow)) > 0 {
+					rule = ruleEnvExfil
+				}
+				dedupKey := fmt.Sprintf("%s|%s|%s", rule, dHost, proc.Attribution.Package.Name)
 				if _, seen := dedupKeys[dedupKey]; seen {
 					continue
 				}
@@ -284,8 +310,8 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 				if len(chain) == 0 {
 					chain = []string{proc.Comm}
 				}
-				findings = append(findings, runschema.Finding{
-					Rule:     ruleInstallScriptEgress,
+				finding := runschema.Finding{
+					Rule:     rule,
 					Severity: "high",
 					Aggregatable: runschema.FindingAgg{
 						Package:  proc.Attribution.Package,
@@ -298,10 +324,14 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 						ProcessChain: chain,
 						Cmdline:      proc.Cmdline,
 						Cwd:          proc.Cwd,
-						Fingerprint:  computeFingerprint(ruleInstallScriptEgress, "", dHost, proc.Attribution.Package.Name),
+						Fingerprint:  computeFingerprint(rule, "", dHost, proc.Attribution.Package.Name),
 						Attribution:  proc.Attribution,
 					},
-				})
+				}
+				if rule == ruleEnvExfil {
+					finding.Context.EnvVars = freshEnvVars(proc, e.TS, taintWindow)
+				}
+				findings = append(findings, finding)
 				continue
 			}
 			if proc.Agent != "" && (isModelHost(dHost) || (isGit(proc.Comm) && dHost == "github.com")) {
@@ -501,6 +531,15 @@ func isInstallScript(p *procNode) bool {
 	return strings.Contains(filepath.ToSlash(p.Cwd), "node_modules/")
 }
 
+// freshEnvVars reports the process's sensitive environment names when the
+// capture is still within the taint window; stale or absent sets yield nil.
+func freshEnvVars(p *procNode, now, taintWindow int64) []string {
+	if len(p.envVars) == 0 || (now-p.envTS) > taintWindow {
+		return nil
+	}
+	return p.envVars
+}
+
 // installHosts are where install scripts legitimately fetch packages, prebuilt
 // binaries and node-gyp headers. Extra hosts come from ScoreOptions.AllowHosts
 // (the `allow-hosts` Action input) for packages like Puppeteer/Cypress that
@@ -620,6 +659,13 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		}
 		if n, ok := rec["bytes_sent"].(float64); ok {
 			ev.BytesSent = uint64(n)
+		}
+		if rawNames, ok := rec["env_names"].([]any); ok {
+			for _, rn := range rawNames {
+				if s, ok := rn.(string); ok && s != "" {
+					ev.EnvNames = append(ev.EnvNames, s)
+				}
+			}
 		}
 		out = append(out, ev)
 	}

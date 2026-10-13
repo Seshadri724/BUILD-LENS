@@ -60,6 +60,9 @@ type Event struct {
 	// BytesSent is set on "send" events: total bytes the kernel accepted from
 	// PID for Dest over the whole run (tcp_sendmsg return values).
 	BytesSent uint64 `json:"bytes_sent,omitempty"`
+	// EnvNames on "exec" events: sensitive-looking environment variable NAMES
+	// present at exec (matched at capture; values are never read or stored).
+	EnvNames []string `json:"env_names,omitempty"`
 }
 
 // AgentHealth reports telemetry, event drops, and degradation status.
@@ -93,6 +96,8 @@ type FindingContext struct {
 	Cwd          string      `json:"cwd,omitempty"`
 	Fingerprint  string      `json:"fingerprint,omitempty"`
 	Attribution  Attribution `json:"attribution,omitempty"`
+	// EnvVars names the sensitive environment variables held at exec time.
+	EnvVars []string `json:"env_vars,omitempty"`
 	// Agent names the AI coding agent whose process tree did this, if any.
 	Agent string `json:"agent,omitempty"`
 }

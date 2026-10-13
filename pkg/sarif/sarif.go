@@ -152,6 +152,9 @@ func FromManifest(m runschema.Manifest) logFile {
 				}, {
 					ID:               "INSTALL_SCRIPT_EGRESS",
 					ShortDescription: text{Text: "Dependency install script contacted a host other than the package registry"},
+				}, {
+					ID:               "ENV_EXFIL",
+					ShortDescription: text{Text: "Install script holding secret-named environment variables contacted an unexpected host"},
 				}},
 			}},
 			Results: results,
@@ -222,6 +225,9 @@ func GenerateStepSummary(m runschema.Manifest) string {
 		if f.Context.Agent != "" {
 			sb.WriteString(fmt.Sprintf("- **Via AI agent:** `%s`\n\n", f.Context.Agent))
 		}
+		if len(f.Context.EnvVars) > 0 {
+			sb.WriteString(fmt.Sprintf("- **Env vars held:** `%s`\n\n", strings.Join(f.Context.EnvVars, "`, `")))
+		}
 		sb.WriteString("**Recommended Action:**\n")
 		if pkg.Ecosystem == "agent" {
 			sb.WriteString(triage.PromptInjectionAdvice + "\n\n")
@@ -282,6 +288,8 @@ func headline(f runschema.Finding) string {
 		return "Critical: dependency read another process's memory or environment"
 	case "INSTALL_SCRIPT_EGRESS":
 		return "High: dependency install script contacted an unexpected host"
+	case "ENV_EXFIL":
+		return "High: install script holding secrets contacted an unexpected host"
 	}
 	return "Critical: dependency credential access"
 }
