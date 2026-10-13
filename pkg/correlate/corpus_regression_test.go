@@ -194,6 +194,16 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			expectedRule: "TAINTED_EGRESS",
 			minFindings:  1,
 		},
+		{
+			// DoH/DoT or cached DNS: no dns event at all, the handshake names it.
+			name:         "sni-hostname-exfil",
+			isMalicious:  true,
+			expectedHost: "vault.doh-shim.example",
+			expectedTier: "env",
+			expectedPkg:  "doh-shim",
+			expectedRule: "TAINTED_EGRESS",
+			minFindings:  1,
+		},
 	}
 
 	var tp, fp, fn, tn int

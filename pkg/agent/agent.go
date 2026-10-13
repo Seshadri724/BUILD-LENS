@@ -10,7 +10,7 @@ type RecordOptions struct {
 	Duration time.Duration
 	Debug    bool
 	StatsOut string
-	Probes   string // "all", "exec", "open", "connect", "send", "dns"
+	Probes   string // "all", "exec", "open", "connect", "send", "dns" ("dns" = hostname resolution: UDP DNS + TLS SNI)
 	NoJSON   bool
 }
 

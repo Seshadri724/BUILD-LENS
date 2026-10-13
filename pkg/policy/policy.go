@@ -148,9 +148,14 @@ func ensureAcc(merge map[recordKey]*acc, k recordKey) *acc {
 func observeEvents(events []eventLite, lockfile string, runIdx int, merge map[recordKey]*acc) {
 	procs := map[uint32]*procInfo{}
 	lookups := map[string][]dnsLite{}
+	sniLookups := map[string][]dnsLite{}
 	for _, e := range events {
 		if e.kind == "dns" {
 			lookups[e.dest] = append(lookups[e.dest], dnsLite{ts: e.ts, host: e.host})
+			continue
+		}
+		if e.kind == "sni" {
+			sniLookups[e.dest] = append(sniLookups[e.dest], dnsLite{ts: e.ts, host: e.host})
 			continue
 		}
 		p, ok := procs[e.pid]
@@ -190,7 +195,10 @@ func observeEvents(events []eventLite, lockfile string, runIdx int, merge map[re
 			continue
 		}
 		dhost := ip
-		if h := resolveHost(lookups[ip], e.ts); h != "" {
+		// SNI names its own connection; DNS is the fallback. Mirrors scoring.
+		if h := resolveHost(sniLookups[ip], e.ts); h != "" {
+			dhost = h
+		} else if h := resolveHost(lookups[ip], e.ts); h != "" {
 			dhost = h
 		}
 		k := recordKey{

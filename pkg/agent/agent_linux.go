@@ -162,10 +162,14 @@ func Record(opts RecordOptions) error {
 
 	stopDNS := make(chan struct{})
 	dnsDone := make(chan int, 1)
+	stopSNI := make(chan struct{})
+	sniDone := make(chan int, 1)
 	if probes == "all" || probes == "dns" {
 		go func() { dnsDone <- sniffDNS(emit, stopDNS, opts.Debug) }()
+		go func() { sniDone <- sniffSNI(emit, stopSNI, opts.Debug) }()
 	} else {
 		dnsDone <- 0
+		sniDone <- 0
 	}
 
 	// Signal readiness to workflow steps
@@ -274,6 +278,8 @@ func Record(opts RecordOptions) error {
 	<-doneReader
 	close(stopDNS)
 	dnsCount := <-dnsDone
+	close(stopSNI)
+	sniCount := <-sniDone
 
 	// Per-(pid, destination) byte totals, emitted once at shutdown.
 	if probes == "all" || probes == "send" {
@@ -325,7 +331,7 @@ func Record(opts RecordOptions) error {
 		cpuTime, _ := ReadProcessCPUTimeMs(os.Getpid())
 		st := AgentStats{
 			RuntimeMS:       elapsed.Milliseconds(),
-			EventsTotal:     int(counts.exec+counts.open+counts.connect+counts.send) + dnsCount,
+			EventsTotal:     int(counts.exec+counts.open+counts.connect+counts.send) + dnsCount + sniCount,
 			RingBufferDrops: ringBufferDrops,
 			FileSize:        fileSize,
 			AgentCPUTimeMS:  cpuTime,
@@ -335,6 +341,7 @@ func Record(opts RecordOptions) error {
 				"connect": int(counts.connect),
 				"send":    int(counts.send),
 				"dns":     dnsCount,
+				"sni":     sniCount,
 			},
 		}
 		if b, err := json.MarshalIndent(st, "", "  "); err == nil {

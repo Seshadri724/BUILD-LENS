@@ -32,8 +32,10 @@ jobs:
           # cmd/bl-agent imports the Linux eBPF bindings, which are generated
           # in build-linux-agent. Keep this job free of generated privileged
           # artifacts; the Linux build job tests the CLI after generation.
-          go test -v ./pkg/attribution ./pkg/correlate
-          go vet ./pkg/attribution ./pkg/correlate
+          # pkg/agent and pkg/sarif are covered there and in live integration;
+          # every other pure-Go package runs here.
+          go test -v ./pkg/attribution ./pkg/correlate ./pkg/policy ./pkg/triage
+          go vet ./pkg/attribution ./pkg/correlate ./pkg/policy ./pkg/triage
 
   build-linux-agent:
     name: Linux eBPF Generation & Binary Build

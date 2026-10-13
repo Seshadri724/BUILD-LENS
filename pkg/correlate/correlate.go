@@ -67,11 +67,16 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 	// the timeline and attach them to findings by (pid, dest) afterwards.
 	sentBytes := map[string]uint64{}
 	haveSendTelemetry := false
-	lookups := map[string][]runschema.Event{} // IP -> dns events, by time
+	lookups := map[string][]runschema.Event{}    // IP -> dns events, by time
+	sniLookups := map[string][]runschema.Event{} // IP -> sni events, by time
 	sorted := make([]runschema.Event, 0, len(events))
 	for _, e := range events {
 		if e.Kind == "dns" {
 			lookups[e.Dest] = append(lookups[e.Dest], e)
+			continue
+		}
+		if e.Kind == "sni" {
+			sniLookups[e.Dest] = append(sniLookups[e.Dest], e)
 			continue
 		}
 		if e.Kind == "send" {
@@ -82,13 +87,15 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 		sorted = append(sorted, e)
 	}
 	slices.SortFunc(sorted, cmpEvent)
-	for _, l := range lookups {
-		slices.SortFunc(l, func(a, b runschema.Event) int {
-			if n := cmp.Compare(a.TS, b.TS); n != 0 {
-				return n
-			}
-			return strings.Compare(a.Host, b.Host)
-		})
+	for _, m := range []map[string][]runschema.Event{lookups, sniLookups} {
+		for _, l := range m {
+			slices.SortFunc(l, func(a, b runschema.Event) int {
+				if n := cmp.Compare(a.TS, b.TS); n != 0 {
+					return n
+				}
+				return strings.Compare(a.Host, b.Host)
+			})
+		}
 	}
 
 	taintWindow := opts.TaintWindowNano
@@ -243,8 +250,14 @@ func ScoreWithOptions(events []runschema.Event, opts ScoreOptions) runschema.Man
 
 		case "connect":
 			ip := destHost(e.Dest)
+			// SNI is authoritative — it names the host on this actual
+			// connection, so it wins over DNS (stale entries, shared CDN IPs).
+			// DNS covers what SNI cannot: plaintext, resumed sessions, and
+			// handshakes the sniffer missed.
 			dHost := ip
-			if h := resolvedHost(lookups[ip], e.TS); h != "" {
+			if h := resolvedHost(sniLookups[ip], e.TS); h != "" {
+				dHost = h
+			} else if h := resolvedHost(lookups[ip], e.TS); h != "" {
 				dHost = h
 			}
 			if l := logFor(proc); l != nil && !isLoopback(ip) {
@@ -529,8 +542,10 @@ func isLoopback(ip string) bool {
 // resolvedHost is the name from the latest lookup of this IP before the connect.
 // Lookups are stamped with kernel arrival time, so a later lookup of the same IP
 // (another process resolving a name) never relabels an earlier connect.
-// ponytail: a CDN IP shared by many names gets the most recent one; per-process
-// attribution of lookups needs the resolver's socket, not a sniffer.
+// ponytail: for DNS, a CDN IP shared by many names gets the most recent one;
+// per-process attribution of lookups needs the resolver's socket, not a
+// sniffer. SNI lookups don't share this weakness — each names its own
+// connection — which is why they take precedence at the call site.
 func resolvedHost(lookups []runschema.Event, ts int64) string {
 	host := ""
 	for _, l := range lookups {
@@ -572,7 +587,7 @@ func LoadJSONL(r io.Reader) ([]runschema.Event, error) {
 		if kind == "" || kind == "TAINTED_EGRESS" {
 			continue
 		}
-		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" && kind != "dns" {
+		if kind != "exec" && kind != "open" && kind != "connect" && kind != "send" && kind != "dns" && kind != "sni" {
 			continue
 		}
 		ev := runschema.Event{Kind: kind}

@@ -294,6 +294,42 @@ func TestRunnerEnvTier(t *testing.T) {
 	}
 }
 
+func TestSNIBeatsStaleDNS(t *testing.T) {
+	base := []runschema.Event{
+		{
+			Kind: "exec", TS: 1000000000, PID: 300, PPID: 1, Comm: "node",
+			Cmdline: "node node_modules/sni-test/postinstall.js", Cwd: "/repo/node_modules/sni-test",
+		},
+		{Kind: "open", TS: 1001000000, PID: 300, PPID: 1, Comm: "node", Path: "/repo/.env"},
+		// A stale/shared DNS answer names the IP first...
+		{Kind: "dns", TS: 1002000000, Host: "stale-cdn.example", Dest: "203.0.113.80"},
+		// ...but the handshake on the actual connection says otherwise.
+		{Kind: "sni", TS: 1009000000, Host: "real.doh-shim.example", Dest: "203.0.113.80"},
+		{Kind: "connect", TS: 1010000000, PID: 300, PPID: 1, Comm: "node", Dest: "203.0.113.80:443"},
+	}
+	m := correlate.Score(base)
+	if len(m.Findings) != 1 {
+		t.Fatalf("findings=%d", len(m.Findings))
+	}
+	if got := m.Findings[0].Aggregatable.DestHost; got != "real.doh-shim.example" {
+		t.Errorf("dest_host=%q, want SNI name", got)
+	}
+
+	// SNI alone (DoH/DoT/cached DNS: no dns event at all) still resolves.
+	noDNS := []runschema.Event{base[0], base[1], base[3], base[4]}
+	m = correlate.Score(noDNS)
+	if len(m.Findings) != 1 || m.Findings[0].Aggregatable.DestHost != "real.doh-shim.example" {
+		t.Fatalf("sni-only: %+v", m.Findings)
+	}
+
+	// DNS alone still works when no handshake was observed.
+	noSNI := []runschema.Event{base[0], base[1], base[2], base[4]}
+	m = correlate.Score(noSNI)
+	if len(m.Findings) != 1 || m.Findings[0].Aggregatable.DestHost != "stale-cdn.example" {
+		t.Fatalf("dns-only: %+v", m.Findings)
+	}
+}
+
 func scoreFile(t *testing.T, name string) runschema.Manifest {
 	t.Helper()
 	return correlate.Score(load(t, name))
