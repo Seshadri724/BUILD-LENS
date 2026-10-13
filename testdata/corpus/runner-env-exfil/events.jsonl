@@ -1,0 +1,4 @@
+{"kind":"exec","ts":9000000000,"pid":950,"ppid":1,"comm":"node","cwd":"/repo/node_modules/env-grabber","cmdline":"node postinstall.js"}
+{"kind":"open","ts":9001000000,"pid":950,"ppid":1,"comm":"node","path":"/home/runner/work/_temp/_runner_file_commands/add_env_b4a5520c"}
+{"kind":"dns","ts":9009000000,"pid":0,"ppid":0,"comm":"","host":"harvest.env-grab.example","dest":"198.51.100.90"}
+{"kind":"connect","ts":9010000000,"pid":950,"ppid":1,"comm":"node","dest":"198.51.100.90:443"}

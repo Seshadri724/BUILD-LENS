@@ -268,6 +268,32 @@ func TestAllowHostsSuppressesInstallScriptEgress(t *testing.T) {
 	}
 }
 
+func TestRunnerEnvTier(t *testing.T) {
+	readThenSend := func(path string) runschema.Manifest {
+		return correlate.Score([]runschema.Event{
+			{Kind: "open", TS: 1000000000, PID: 60, PPID: 1, Comm: "node", Path: path},
+			{Kind: "connect", TS: 1001000000, PID: 60, PPID: 1, Comm: "node", Dest: "9.9.9.9:443"},
+		})
+	}
+
+	m := readThenSend("/home/runner/work/_temp/_runner_file_commands/add_env_b4a5520c")
+	if len(m.Findings) != 1 || m.Findings[0].Aggregatable.FileTier != "runner_env" {
+		t.Fatalf("runner env file should taint as runner_env, got %+v", m.Findings)
+	}
+
+	// A real .env keeps its own tier even under a runner work dir.
+	m = readThenSend("/home/runner/work/app/app/.env")
+	if len(m.Findings) != 1 || m.Findings[0].Aggregatable.FileTier != "env" {
+		t.Fatalf("expected env tier, got %+v", m.Findings)
+	}
+
+	// A non-secret temp file must not taint: plain node, no package context.
+	m = readThenSend("/home/runner/work/_temp/foobar.log")
+	if m.Status != "clean" || len(m.Findings) != 0 {
+		t.Fatalf("non-secret temp file should be clean, got status=%s %+v", m.Status, m.Findings)
+	}
+}
+
 func scoreFile(t *testing.T, name string) runschema.Manifest {
 	t.Helper()
 	return correlate.Score(load(t, name))

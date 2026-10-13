@@ -435,9 +435,26 @@ func fileTier(path string) string {
 		return "git_credential"
 	case strings.Contains(lower, "/etc/shadow") || strings.Contains(lower, "/etc/security"):
 		return "system_auth"
+	case isRunnerEnvFile(lower):
+		return "runner_env"
 	default:
 		return ""
 	}
+}
+
+// isRunnerEnvFile matches CI runner temp env files, where step secrets also
+// live on disk (GitHub Actions: $RUNNER_TEMP/_runner_file_commands/add_env_*,
+// github_env_*). Reading one taints like reading a .env. Pure in-memory
+// process.env reads still open no file and stay blind — see README.
+func isRunnerEnvFile(lower string) bool {
+	base := lower[strings.LastIndex(lower, "/")+1:]
+	if strings.HasSuffix(base, ".env.sh") {
+		return true
+	}
+	if !strings.Contains(lower, "_temp") {
+		return false
+	}
+	return strings.Contains(base, "env") || strings.Contains(lower, "_runner_file_commands")
 }
 
 // isGit reports git itself, which reads its own config and credentials before

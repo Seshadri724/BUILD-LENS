@@ -183,6 +183,17 @@ func TestCorpusRegressionSuite(t *testing.T) {
 			expectedRule: "PROCESS_MEMORY_READ",
 			minFindings:  1,
 		},
+		{
+			// Runner temp env files carry step secrets on disk: read → egress
+			// is tainted even though process.env itself opens no file.
+			name:         "runner-env-exfil",
+			isMalicious:  true,
+			expectedHost: "harvest.env-grab.example",
+			expectedTier: "runner_env",
+			expectedPkg:  "env-grabber",
+			expectedRule: "TAINTED_EGRESS",
+			minFindings:  1,
+		},
 	}
 
 	var tp, fp, fn, tn int
