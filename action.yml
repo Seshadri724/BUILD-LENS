@@ -7,7 +7,7 @@ branding:
 
 inputs:
   mode:
-    description: 'Execution mode (observe only)'
+    description: 'Execution mode: observe (default) or audit (also append per-run egress observations to .buildlens/observed.jsonl on clean runs)'
     required: false
     default: 'observe'
   manifest:

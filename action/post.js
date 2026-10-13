@@ -136,13 +136,19 @@ function post() {
   const scoreBin = agentBin || path.join(actionPath, 'bin', 'bl-agent');
   console.log(`Scoring runtime events from ${eventsPath}...`);
 
+  const mode = (process.env.INPUT_MODE || 'observe').toLowerCase();
+  if (mode !== 'observe' && mode !== 'audit') {
+    console.log(`::warning::Unknown BuildLens mode '${process.env.INPUT_MODE}', treating as observe.`);
+  }
+
+  let manifest = null;
   try {
     const allowHosts = (process.env['INPUT_ALLOW-HOSTS'] || '').replace(/"/g, '');
     const scoreCmd = `"${scoreBin}" score -in "${eventsPath}" -stats "${statsPath}" -out "${manifestOut}" -sarif "${sarifOut}" -lockfile "${lockfilePath}" -allow-hosts "${allowHosts}"`;
     execSync(scoreCmd, { stdio: 'inherit' });
 
     if (fs.existsSync(manifestOut)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestOut, 'utf8'));
+      manifest = JSON.parse(fs.readFileSync(manifestOut, 'utf8'));
       setOutput('manifest', manifestOut);
       setOutput('sarif', sarifOut);
       setOutput('status', manifest.status || 'clean');
@@ -150,6 +156,29 @@ function post() {
     }
   } catch (err) {
     console.log(`::warning::Scoring encountered an error: ${err.message}`);
+  }
+
+  // Audit mode appends this run's egress observations (host, package, counts
+  // only — never argv or paths) to a workspace ledger. Commit it; after 5+
+  // clean runs generate the policy with:
+  //   bl-agent policy -in .buildlens/observed.jsonl -out .buildlens/policy.yml
+  // The ledger is append-only: re-merging ledgers double-counts runs.
+  if (mode === 'audit' && manifest && manifest.status === 'clean' && eventsPath && fs.existsSync(eventsPath)) {
+    try {
+      const ledgerDir = path.join(workspace, '.buildlens');
+      fs.mkdirSync(ledgerDir, { recursive: true });
+      const tmpObs = path.join(runDir, 'observed.jsonl');
+      execSync(`"${scoreBin}" policy -in "${eventsPath}" -format jsonl -out "${tmpObs}" -lockfile "${lockfilePath}"`, { stdio: 'ignore' });
+      const lines = fs.existsSync(tmpObs) ? fs.readFileSync(tmpObs, 'utf8') : '';
+      if (lines.trim()) {
+        fs.appendFileSync(path.join(ledgerDir, 'observed.jsonl'), lines);
+        console.log('BuildLens audit: appended egress observations to .buildlens/observed.jsonl');
+      } else {
+        console.log('BuildLens audit: run contacted nothing new; ledger unchanged.');
+      }
+    } catch (err) {
+      console.log(`::warning::BuildLens audit ledger failed (build unaffected): ${err.message}`);
+    }
   }
 
   if (process.env['INPUT_UPLOAD-SARIF'] === 'true' && fs.existsSync(sarifOut)) {

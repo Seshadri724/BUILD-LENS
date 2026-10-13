@@ -12,13 +12,14 @@ import (
 
 	"github.com/buildlens/buildlens/pkg/agent"
 	"github.com/buildlens/buildlens/pkg/correlate"
+	"github.com/buildlens/buildlens/pkg/policy"
 	"github.com/buildlens/buildlens/pkg/runschema"
 	"github.com/buildlens/buildlens/pkg/sarif"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: bl-agent <score|record> [options]")
+		fmt.Fprintln(os.Stderr, "usage: bl-agent <score|record|policy> [options]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -30,6 +31,11 @@ func main() {
 	case "record":
 		if err := record(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "bl-agent record: %v\n", err)
+			os.Exit(1)
+		}
+	case "policy":
+		if err := policyCmd(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "bl-agent policy: %v\n", err)
 			os.Exit(1)
 		}
 	default:
@@ -195,6 +201,50 @@ func parseAllowHosts(s string) []string {
 		}
 	}
 	return out
+}
+
+// policyCmd aggregates event and/or observation ledger inputs into an
+// observed-egress policy (YAML, reviewable) or an audit ledger fragment
+// (JSONL, appendable). Aggregates only — safe to commit.
+func policyCmd(args []string) error {
+	fs := flag.NewFlagSet("policy", flag.ContinueOnError)
+	in := fs.String("in", "", "comma-separated event JSONL and/or observation JSONL inputs")
+	out := fs.String("out", ".buildlens/policy.yml", "policy output path (\"-\" for stdout)")
+	format := fs.String("format", "yaml", "output format: yaml (reviewable policy) or jsonl (ledger fragment)")
+	lockfile := fs.String("lockfile", "package-lock.json", "path to package-lock.json for attribution")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *format != "yaml" && *format != "jsonl" {
+		return fmt.Errorf("unknown format %q: want yaml or jsonl", *format)
+	}
+	inputs := parseAllowHosts(*in)
+	if len(inputs) == 0 {
+		return fmt.Errorf("no inputs: pass -in run1.jsonl[,run2.jsonl...]")
+	}
+	recs, st, err := policy.SummarizeFiles(inputs, *lockfile)
+	if err != nil {
+		return err
+	}
+	var data []byte
+	if *format == "jsonl" {
+		data, err = policy.MarshalJSONL(recs)
+	} else {
+		data, err = policy.MarshalYAMLPolicy(recs, st)
+	}
+	if err != nil {
+		return err
+	}
+	if err := policy.WriteFile(*out, data); err != nil {
+		return err
+	}
+	hosts := map[string]struct{}{}
+	for _, r := range recs {
+		hosts[r.Host] = struct{}{}
+	}
+	fmt.Printf("BuildLens policy — %d hosts, %d package entries from %d runs (%d events) → %s\n",
+		len(hosts), len(recs), st.Runs, st.Events, *out)
+	return nil
 }
 
 func orNone(items []string) string {

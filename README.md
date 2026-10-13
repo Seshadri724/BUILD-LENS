@@ -92,6 +92,7 @@ Not supported yet: macOS/Windows or ARM runners, pip/other ecosystems, TLS SNI h
 
 | Input | Default | |
 |---|---|---|
+| `mode` | `observe` | `observe`, or `audit` to also append per-run egress observations to `.buildlens/observed.jsonl` (see quickstart) |
 | `lockfile` | `package-lock.json` | lockfile used to attribute processes to npm packages |
 | `allow-hosts` | `""` | comma-separated extra hosts install scripts may contact (e.g. binary mirrors) |
 | `manifest` | `buildlens-manifest.json` | where to write the run manifest |
